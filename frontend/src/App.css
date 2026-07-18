@@ -1,0 +1,116 @@
+/* App-level styles — keep global tokens in index.css */
+
+/* Ambient background wash — soft cream with a hint of sage in the corners */
+.app-bg {
+  background:
+    radial-gradient(circle at 0% 0%, rgba(92, 122, 90, 0.10) 0%, transparent 40%),
+    radial-gradient(circle at 100% 100%, rgba(184, 99, 47, 0.06) 0%, transparent 45%),
+    #FAF7F0;
+  min-height: 100dvh;
+}
+
+/* Card lift interaction */
+.card-lift {
+  transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1),
+              box-shadow 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.card-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 20px 40px rgba(43, 43, 38, 0.08);
+}
+
+/* Pill toggle */
+.pill-track {
+  position: relative;
+  padding: 4px;
+  background: rgba(58, 79, 58, 0.06);
+  border: 1px solid rgba(92, 122, 90, 0.12);
+  border-radius: 999px;
+  display: inline-flex;
+}
+.pill-thumb {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #5C7A5A, #3A4F3A);
+  box-shadow: 0 4px 16px rgba(58, 79, 58, 0.24);
+}
+
+/* Choice card selected ring — subtle gold, per design guidelines */
+.choice-ring-selected {
+  box-shadow: 0 0 0 2px #5C7A5A, 0 0 0 5px rgba(217, 164, 65, 0.35),
+              0 12px 30px rgba(43, 43, 38, 0.08);
+}
+
+/* Progress bar */
+.progress-track {
+  height: 3px;
+  background: rgba(58, 79, 58, 0.08);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #D9A441, #B8632F);
+  border-radius: 999px;
+  transition: width 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Section heading eyebrow */
+.eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #3A4F3A;
+}
+
+/* Button primary */
+.btn-primary {
+  background: #5C7A5A;
+  color: #FAF7F0;
+  border-radius: 999px;
+  padding: 14px 28px;
+  font-weight: 500;
+  font-size: 15px;
+  transition: background-color 0.25s ease, transform 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  cursor: pointer;
+}
+.btn-primary:hover { background: #3A4F3A; }
+.btn-primary:active { transform: scale(0.98); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-ghost {
+  background: transparent;
+  color: #3A4F3A;
+  border: 1px solid rgba(58, 79, 58, 0.2);
+  border-radius: 999px;
+  padding: 12px 22px;
+  font-weight: 500;
+  font-size: 14px;
+  transition: background-color 0.25s ease, border-color 0.25s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.btn-ghost:hover { background: rgba(58, 79, 58, 0.04); border-color: rgba(58, 79, 58, 0.4); }
+
+/* Gold accent underline for prices/badges */
+.gold-underline {
+  position: relative;
+  display: inline-block;
+}
+.gold-underline::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0;
+  bottom: -4px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #D9A441, transparent);
+}

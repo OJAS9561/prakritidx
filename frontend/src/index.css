@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --sage: #5C7A5A;
+  --deep-sage: #3A4F3A;
+  --copper: #B8632F;
+  --copper-light: #D98A4E;
+  --gold: #D9A441;
+  --cream: #FAF7F0;
+  --ink: #2B2B26;
+}
+
+* { -webkit-tap-highlight-color: transparent; }
+
+html, body, #root {
+  height: 100%;
+  background: var(--cream);
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, sans-serif;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--cream);
+}
+
+::selection {
+  background: rgba(217, 164, 65, 0.3);
+  color: var(--ink);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(92,122,90,0.25); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(92,122,90,0.4); }
+
+/* Subtle grain texture overlay */
+.grain::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+
+/* Serif utility */
+.font-display { font-family: 'Fraunces', Georgia, serif; font-feature-settings: "ss01","liga"; }
+
+/* Gold divider accent */
+.gold-divider {
+  height: 1px;
+  background: linear-gradient(to right, transparent, rgba(217,164,65,0.6), transparent);
+}
+
+/* Focus rings — sage accent */
+*:focus-visible {
+  outline: 2px solid rgba(92,122,90,0.6);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Utility: safe area bottom */
+.pb-safe { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1.5rem); }
