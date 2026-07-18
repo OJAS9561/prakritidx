@@ -1,24 +1,34 @@
 """
-PrakritiDx Backend — AI-powered Ayurvedic Skin & Hair guidance.
-FastAPI + MongoDB + Emergent LLM (Claude Sonnet 4.5).
+PrakritiDx Backend — v2
+- Chat + selfie + lab report + fixed MCQ intake
+- Medical urgency HARD-BLOCK safety check
+- Free hook (static frame + AI teaser)
+- Razorpay Payment Links (test mode) gate
+- Post-payment: full AI report (with GPT-4o vision on selfie + lab report)
 """
 import os
 import json
 import uuid
+import base64
+import hmac
+import hashlib
 import logging
 from datetime import datetime, timezone
 from typing import Optional, Literal, List, Dict, Any
 
-from fastapi import FastAPI, APIRouter, HTTPException, Body
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 
-# Load env FIRST
 load_dotenv()
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage  # noqa: E402
+from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent  # noqa: E402
+import razorpay  # noqa: E402
+
+from safety import check_medical_urgency, BLOCK_MESSAGE  # noqa: E402
+from intake import get_questions  # noqa: E402
 
 # -----------------------------------------------------------------------------
 # Config
@@ -29,328 +39,269 @@ logger = logging.getLogger("prakritidx")
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
+RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
+APP_PUBLIC_URL = os.environ.get("APP_PUBLIC_URL", "")
 CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*")
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
 
-app = FastAPI(title="PrakritiDx API", version="0.1.0")
+# Razorpay client — created lazily so the app boots even without keys set.
+_rzp_client = None
+
+
+def rzp() -> razorpay.Client:
+    global _rzp_client
+    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+        raise HTTPException(
+            status_code=503,
+            detail="Payments are not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.",
+        )
+    if _rzp_client is None:
+        _rzp_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+    return _rzp_client
+
+
+app = FastAPI(title="PrakritiDx API", version="2.0.0")
 api = APIRouter(prefix="/api")
 
-# -----------------------------------------------------------------------------
-# Curated Prakriti quiz (12 questions, works for both skin & hair with context)
-# -----------------------------------------------------------------------------
 Category = Literal["skin", "hair"]
-Dosha = Literal["vata", "pitta", "kapha"]
-
-QUIZ_QUESTIONS: List[Dict[str, Any]] = [
-    {
-        "id": "q1",
-        "prompt": "How would you describe your natural {surface}?",
-        "options": [
-            {"value": "vata", "label_skin": "Dry, thin, sometimes flaky", "label_hair": "Dry, frizzy, prone to breakage"},
-            {"value": "pitta", "label_skin": "Sensitive, warm, occasional redness", "label_hair": "Fine, silky, prone to early greying"},
-            {"value": "kapha", "label_skin": "Oily, thick, smooth", "label_hair": "Thick, dense, oily at roots"},
-        ],
-    },
-    {
-        "id": "q2",
-        "prompt": "In cold weather, your {surface} usually…",
-        "options": [
-            {"value": "vata", "label_skin": "Feels tight, rough, or cracks", "label_hair": "Becomes brittle, static, or tangled"},
-            {"value": "pitta", "label_skin": "Feels balanced but flushes easily", "label_hair": "Stays mostly the same"},
-            {"value": "kapha", "label_skin": "Stays supple, minimal change", "label_hair": "Feels heavier but healthy"},
-        ],
-    },
-    {
-        "id": "q3",
-        "prompt": "In hot & humid weather, your {surface} tends to…",
-        "options": [
-            {"value": "vata", "label_skin": "Feels okay, sometimes dehydrated", "label_hair": "Frizzes but doesn't get oily"},
-            {"value": "pitta", "label_skin": "Breaks out, gets red or irritated", "label_hair": "Sweats at scalp, itchy"},
-            {"value": "kapha", "label_skin": "Gets very oily and congested", "label_hair": "Becomes greasy fast"},
-        ],
-    },
-    {
-        "id": "q4",
-        "prompt": "How often do you experience blemishes / scalp issues?",
-        "options": [
-            {"value": "vata", "label_skin": "Rarely, but dry patches instead", "label_hair": "Rarely oily, more flaky scalp"},
-            {"value": "pitta", "label_skin": "Often — inflamed, red pimples", "label_hair": "Itchy scalp, sensitive"},
-            {"value": "kapha", "label_skin": "Cystic, whiteheads, congestion", "label_hair": "Dandruff, heavy oil buildup"},
-        ],
-    },
-    {
-        "id": "q5",
-        "prompt": "Your {surface} responds to stress by…",
-        "options": [
-            {"value": "vata", "label_skin": "Getting drier, more sensitive", "label_hair": "Shedding, becoming dull"},
-            {"value": "pitta", "label_skin": "Flaring red, rashes, breakouts", "label_hair": "Greying, thinning at temples"},
-            {"value": "kapha", "label_skin": "Getting puffy, oilier", "label_hair": "Getting greasier, heavier"},
-        ],
-    },
-    {
-        "id": "q6",
-        "prompt": "Your body frame is generally…",
-        "options": [
-            {"value": "vata", "label_skin": "Lean, light, fast metabolism", "label_hair": "Lean, light, fast metabolism"},
-            {"value": "pitta", "label_skin": "Medium, athletic, warm-bodied", "label_hair": "Medium, athletic, warm-bodied"},
-            {"value": "kapha", "label_skin": "Solid, curvy, gains weight easily", "label_hair": "Solid, curvy, gains weight easily"},
-        ],
-    },
-    {
-        "id": "q7",
-        "prompt": "Your energy through the day is…",
-        "options": [
-            {"value": "vata", "label_skin": "Burst-and-crash, variable", "label_hair": "Burst-and-crash, variable"},
-            {"value": "pitta", "label_skin": "Sharp, focused, intense", "label_hair": "Sharp, focused, intense"},
-            {"value": "kapha", "label_skin": "Steady, calm, slow to start", "label_hair": "Steady, calm, slow to start"},
-        ],
-    },
-    {
-        "id": "q8",
-        "prompt": "Your appetite / digestion is…",
-        "options": [
-            {"value": "vata", "label_skin": "Irregular, sometimes forgets meals", "label_hair": "Irregular, sometimes forgets meals"},
-            {"value": "pitta", "label_skin": "Strong, gets 'hangry' quickly", "label_hair": "Strong, gets 'hangry' quickly"},
-            {"value": "kapha", "label_skin": "Slow but steady, rarely hungry", "label_hair": "Slow but steady, rarely hungry"},
-        ],
-    },
-    {
-        "id": "q9",
-        "prompt": "You sleep…",
-        "options": [
-            {"value": "vata", "label_skin": "Lightly, easily disturbed, vivid dreams", "label_hair": "Lightly, easily disturbed, vivid dreams"},
-            {"value": "pitta", "label_skin": "Moderately, wake feeling rested", "label_hair": "Moderately, wake feeling rested"},
-            {"value": "kapha", "label_skin": "Deeply, love long sleep, hard to wake", "label_hair": "Deeply, love long sleep, hard to wake"},
-        ],
-    },
-    {
-        "id": "q10",
-        "prompt": "Under the sun, your {surface} usually…",
-        "options": [
-            {"value": "vata", "label_skin": "Tans lightly, feels dehydrated", "label_hair": "Gets brittle and lightens"},
-            {"value": "pitta", "label_skin": "Burns easily, freckles", "label_hair": "Fades color, scalp burns"},
-            {"value": "kapha", "label_skin": "Tans evenly, tolerates well", "label_hair": "Handles sun well, stays healthy"},
-        ],
-    },
-    {
-        "id": "q11",
-        "prompt": "Your natural {surface} tone/texture leans…",
-        "options": [
-            {"value": "vata", "label_skin": "Cool undertone, thin & delicate", "label_hair": "Wispy, curly or kinky texture"},
-            {"value": "pitta", "label_skin": "Warm undertone, freckled or ruddy", "label_hair": "Fine, wavy, medium density"},
-            {"value": "kapha", "label_skin": "Even, luminous, thicker feel", "label_hair": "Wavy to straight, thick strands"},
-        ],
-    },
-    {
-        "id": "q12",
-        "prompt": "Which resonates most for your ideal outcome?",
-        "options": [
-            {"value": "vata", "label_skin": "Deep nourishment & hydration", "label_hair": "Strength, moisture & shine"},
-            {"value": "pitta", "label_skin": "Calm, cool, clear complexion", "label_hair": "Soothed scalp, less shedding"},
-            {"value": "kapha", "label_skin": "Detox, clarity, less oiliness", "label_hair": "Volume, freshness, less buildup"},
-        ],
-    },
-]
 
 
 # -----------------------------------------------------------------------------
-# Curated Ayurvedic ingredient / routine library
+# Pricing (in paise for Razorpay — but shown to user as rupees)
 # -----------------------------------------------------------------------------
-INGREDIENT_LIBRARY: Dict[str, Dict[str, List[Dict[str, str]]]] = {
-    "skin": {
-        "vata": [
-            {"name": "Almond Oil", "sanskrit": "Vatada Taila", "benefit": "Deeply nourishes dry, thin skin"},
-            {"name": "Ashwagandha", "sanskrit": "Ashwagandha", "benefit": "Calms stress-induced sensitivity"},
-            {"name": "Sesame Oil", "sanskrit": "Tila Taila", "benefit": "Grounding warm oil for dry skin"},
-            {"name": "Shatavari", "sanskrit": "Shatavari", "benefit": "Restores moisture and elasticity"},
-            {"name": "Rose", "sanskrit": "Gulab", "benefit": "Hydrating and softening mist"},
-        ],
-        "pitta": [
-            {"name": "Sandalwood", "sanskrit": "Chandana", "benefit": "Cools redness and inflammation"},
-            {"name": "Aloe Vera", "sanskrit": "Kumari", "benefit": "Soothes heat and irritation"},
-            {"name": "Manjistha", "sanskrit": "Manjistha", "benefit": "Purifies blood, evens tone"},
-            {"name": "Neem", "sanskrit": "Nimba", "benefit": "Antibacterial for acne-prone skin"},
-            {"name": "Rose Water", "sanskrit": "Gulab Jal", "benefit": "pH-balancing and calming"},
-        ],
-        "kapha": [
-            {"name": "Turmeric", "sanskrit": "Haridra", "benefit": "Detoxifies and brightens"},
-            {"name": "Tulsi", "sanskrit": "Tulsi", "benefit": "Clears congestion and buildup"},
-            {"name": "Clay (Multani Mitti)", "sanskrit": "Multani Mitti", "benefit": "Absorbs excess oil"},
-            {"name": "Ginger", "sanskrit": "Adraka", "benefit": "Boosts circulation"},
-            {"name": "Honey (raw)", "sanskrit": "Madhu", "benefit": "Antibacterial exfoliant"},
-        ],
-    },
-    "hair": {
-        "vata": [
-            {"name": "Bhringraj Oil", "sanskrit": "Bhringraj", "benefit": "Nourishes dry, brittle strands"},
-            {"name": "Amla", "sanskrit": "Amalaki", "benefit": "Strengthens weak roots"},
-            {"name": "Coconut Oil", "sanskrit": "Narikela Taila", "benefit": "Locks in moisture"},
-            {"name": "Brahmi", "sanskrit": "Brahmi", "benefit": "Calms scalp, thickens hair"},
-            {"name": "Fenugreek", "sanskrit": "Methi", "benefit": "Restores shine and softness"},
-        ],
-        "pitta": [
-            {"name": "Amla", "sanskrit": "Amalaki", "benefit": "Prevents early greying"},
-            {"name": "Bhringraj", "sanskrit": "Bhringraj", "benefit": "Cools scalp, prevents shedding"},
-            {"name": "Coconut Oil", "sanskrit": "Narikela Taila", "benefit": "Cooling scalp treatment"},
-            {"name": "Hibiscus", "sanskrit": "Japa", "benefit": "Soothes irritation, promotes growth"},
-            {"name": "Neem", "sanskrit": "Nimba", "benefit": "Anti-inflammatory scalp care"},
-        ],
-        "kapha": [
-            {"name": "Reetha", "sanskrit": "Aritha", "benefit": "Deep cleanses excess oil"},
-            {"name": "Shikakai", "sanskrit": "Shikakai", "benefit": "Gentle clarifying wash"},
-            {"name": "Neem", "sanskrit": "Nimba", "benefit": "Fights dandruff and buildup"},
-            {"name": "Tulsi", "sanskrit": "Tulsi", "benefit": "Refreshes heavy, greasy scalp"},
-            {"name": "Rosemary", "sanskrit": "Rosemary", "benefit": "Stimulates roots, adds volume"},
-        ],
-    },
+PRICE_SINGLE_PAISE = 9900  # ₹99
+PRICE_COMBO_PAISE = 14900  # ₹149
+
+PRODUCT_LABEL = {
+    "single": "PrakritiDx — Full Report (Single)",
+    "combo": "PrakritiDx — Combo Report (Skin + Hair)",
 }
 
 
 # -----------------------------------------------------------------------------
 # Models
 # -----------------------------------------------------------------------------
-class Answer(BaseModel):
+class IntakeAnswer(BaseModel):
     question_id: str
-    value: Dosha
+    values: List[str] = []          # multi-select values
+    free_text: Optional[str] = None  # for q7
 
 
-class QuizSubmission(BaseModel):
+class IntakeSubmit(BaseModel):
     session_id: str = Field(..., min_length=1)
     category: Category
-    answers: List[Answer]
+    chat_text: Optional[str] = None
+    answers: List[IntakeAnswer] = []
+    selfie_upload_id: Optional[str] = None
+    lab_upload_id: Optional[str] = None
 
 
-class DoshaScores(BaseModel):
-    vata: int
-    pitta: int
-    kapha: int
+class PaymentCreate(BaseModel):
+    session_id: str
+    plan: Literal["single", "combo"]
+    category: Category  # the section they're currently in (which unlocks after single)
 
 
-class QuizResult(BaseModel):
+class ReportRequest(BaseModel):
     session_id: str
     category: Category
-    primary_dosha: Dosha
-    secondary_dosha: Optional[Dosha] = None
-    scores: DoshaScores
-    dosha_label: str  # e.g. "Vata-Pitta"
-    submitted_at: str
-
-
-class RecommendationRequest(BaseModel):
-    session_id: str
-    category: Category
-    primary_dosha: Dosha
-    secondary_dosha: Optional[Dosha] = None
-
-
-class Recommendations(BaseModel):
-    session_id: str
-    category: Category
-    dosha_label: str
-    summary: str
-    routine: List[Dict[str, str]]  # [{time, step, why}]
-    key_ingredients: List[Dict[str, str]]
-    avoid: List[str]
-    do: List[str]
-    dont: List[str]
-    herbs: List[Dict[str, str]]
-    generated_at: str
 
 
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
-DOSHA_META = {
-    "vata": {"element": "Air & Space", "quality": "Dry, light, cool, mobile", "color": "#8B7BAA"},
-    "pitta": {"element": "Fire & Water", "quality": "Hot, sharp, oily, intense", "color": "#B8632F"},
-    "kapha": {"element": "Earth & Water", "quality": "Heavy, cool, oily, stable", "color": "#5C7A5A"},
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def _get_intake(session_id: str, category: str) -> Optional[Dict[str, Any]]:
+    doc = await db.intakes.find_one({"session_id": session_id, "category": category})
+    if doc:
+        doc.pop("_id", None)
+    return doc
+
+
+def _collect_free_text(intake: Dict[str, Any]) -> List[str]:
+    fields = [intake.get("chat_text") or ""]
+    for ans in intake.get("answers", []):
+        if ans.get("free_text"):
+            fields.append(ans["free_text"])
+    return fields
+
+
+# Deterministic static dosha hook frames — 2 sentences of setup, AI generates 1 teaser sentence at end.
+DOSHA_HINTS = {
+    "skin": {
+        "vata": {
+            "signals": ["dryness_cracks", "flaky", "cold_dry", "lack_of_sleep", "under_1m", "cyclical", "around_eyes"],
+            "frame": "Your inputs are pointing toward a Vata-leaning skin pattern — dry, delicate, reactive to weather and irregular sleep. Vata skin thrives on grounding oils, warmth, and consistent rhythm.",
+        },
+        "pitta": {
+            "signals": ["red_bumps", "pigmentation", "stress", "hot_humid", "spicy_oily_food", "acid_reflux", "cheeks", "hormonal"],
+            "frame": "Your inputs are pointing toward a Pitta-leaning skin pattern — heat, inflammation, and reactivity to stress and spicy food. Pitta skin needs cooling, calming, and blood-purifying care.",
+        },
+        "kapha": {
+            "signals": ["oily_shine", "rough_bumpy", "tzone", "back_chest", "2y_plus", "bloating", "constipation"],
+            "frame": "Your inputs are pointing toward a Kapha-leaning skin pattern — heaviness, congestion, and slow-moving oil buildup. Kapha skin needs stimulation, detox, and lighter routines.",
+        },
+    },
+    "hair": {
+        "vata": {
+            "signals": ["dry_itchy", "split_breakage", "diffuse", "seasonal", "seasonal_change", "cold_dry"],
+            "frame": "Your inputs are pointing toward a Vata-leaning hair pattern — dryness, frizz, and fragility that shifts with the seasons. Vata hair needs deep oiling, warmth, and consistent nourishment.",
+        },
+        "pitta": {
+            "signals": ["receding", "crown_thinning", "high_stress", "post_illness", "postpartum_hormonal", "acid_reflux"],
+            "frame": "Your inputs are pointing toward a Pitta-leaning hair pattern — thinning, early greying, and stress-triggered shedding. Pitta hair needs cooling scalp care and calming rituals.",
+        },
+        "kapha": {
+            "signals": ["oily_day2", "dandruff", "visible_scalp", "shedding", "poor_diet", "bloating", "constipation"],
+            "frame": "Your inputs are pointing toward a Kapha-leaning hair pattern — heavy roots, oiliness, and dandruff-prone scalp. Kapha hair needs clarifying, stimulation, and lightness.",
+        },
+    },
 }
 
 
-def compute_dosha(answers: List[Answer]) -> Dict[str, Any]:
+def _tally_dosha_from_intake(category: str, intake: Dict[str, Any]) -> str:
+    """Naive scoring: count how many selected multi-select values match each dosha's signal set."""
+    hints = DOSHA_HINTS[category]
+    picked_values: List[str] = []
+    for a in intake.get("answers", []):
+        picked_values.extend(a.get("values") or [])
     scores = {"vata": 0, "pitta": 0, "kapha": 0}
-    for a in answers:
-        scores[a.value] = scores.get(a.value, 0) + 1
-
-    sorted_doshas = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    primary = sorted_doshas[0][0]
-    secondary = None
-    # If second is close (within 2 points), treat as dual dosha
-    if sorted_doshas[1][1] >= sorted_doshas[0][1] - 2 and sorted_doshas[1][1] > 0:
-        secondary = sorted_doshas[1][0]
-
-    if secondary:
-        label = f"{primary.capitalize()}-{secondary.capitalize()}"
-    else:
-        label = primary.capitalize()
-
-    return {
-        "scores": scores,
-        "primary": primary,
-        "secondary": secondary,
-        "label": label,
-    }
+    for dosha, meta in hints.items():
+        for v in meta["signals"]:
+            if v in picked_values:
+                scores[dosha] += 1
+    # ties broken by first-declared order (vata > pitta > kapha)
+    ordered = sorted(scores.items(), key=lambda x: (-x[1], ["vata", "pitta", "kapha"].index(x[0])))
+    return ordered[0][0]
 
 
-async def generate_ai_recommendations(
-    category: str, dosha_label: str, primary: str, secondary: Optional[str]
-) -> Dict[str, Any]:
-    """Call Claude Sonnet 4.5 via Emergent LLM to generate personalized recommendations."""
-    session_id = f"rec-{uuid.uuid4().hex[:12]}"
-
-    system_prompt = (
-        "You are an expert Ayurvedic consultant blending classical Ayurveda with modern dermatology "
-        "and trichology. You give clean, structured, evidence-friendly guidance. Never use generic "
-        "'wellness' fluff. Never recommend prescription medications. Speak with warmth and precision."
+async def _generate_teaser_line(category: str, dosha: str, intake: Dict[str, Any]) -> str:
+    """One-sentence AI teaser — deliberately withholds the routine."""
+    prompt = (
+        f"The user's {category} constitution reads as {dosha.capitalize()}-leaning. "
+        f"Their chat description was: {(intake.get('chat_text') or '(none)')[:400]}\n\n"
+        f"Write ONE short, warm, curiosity-building sentence (max 22 words) that hints at what their "
+        f"full personalized routine will address — but does NOT give away specific ingredients, steps, "
+        f"or diet advice. No lists. No colons. No em-dashes at the start. Return only the sentence."
     )
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f"teaser-{uuid.uuid4().hex[:8]}",
+            system_message="You write concise, elegant, curiosity-piquing wellness copy.",
+        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        resp = await chat.send_message(UserMessage(text=prompt))
+        line = str(resp).strip().strip('"').strip("'")
+        # keep it as a single sentence
+        if "." in line:
+            line = line.split(".")[0].strip() + "."
+        return line
+    except Exception:
+        return "Your full report will map the exact rituals, ingredients, and diet shifts your constitution is asking for."
+
+
+async def _generate_full_report(category: str, dosha: str, intake: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Generate the FULL paid report using GPT-4o vision if selfie/lab report are attached.
+    Returns structured JSON.
+    """
+    selfie_b64 = intake.get("selfie_b64")
+    lab_b64 = intake.get("lab_b64")
+    lab_mime = intake.get("lab_mime")
 
     surface = "skin" if category == "skin" else "scalp & hair"
-    prompt = f"""Generate a personalized Ayurvedic {surface} regimen for a {dosha_label} constitution
-(primary dosha: {primary}{', secondary: ' + secondary if secondary else ''}).
 
-Return ONLY valid JSON matching exactly this shape (no markdown, no code fences):
+    picked = []
+    for a in intake.get("answers", []):
+        if a.get("values"):
+            picked.append(f"{a['question_id']}: {', '.join(a['values'])}")
+        if a.get("free_text"):
+            picked.append(f"{a['question_id']} (free text): {a['free_text'][:300]}")
+
+    chat_text = intake.get("chat_text") or "(none)"
+
+    system_prompt = (
+        "You are a senior Ayurvedic consultant blending classical Ayurveda with modern dermatology "
+        "and trichology. When a selfie is attached, briefly analyze visible signs (dryness, oiliness, "
+        "redness, texture, scalp visibility, hair density) as an input. When a lab/test report is "
+        "attached, extract any relevant findings (thyroid, hemoglobin, vitamin D/B12, hormones, "
+        "inflammatory markers, glucose) and factor them into the recommendation. Never diagnose. "
+        "Never recommend prescription medication. Speak with warmth and precision."
+    )
+
+    user_text = f"""Constitution: {dosha.capitalize()}-leaning for {surface}.
+
+USER-REPORTED CHAT:
+{chat_text[:800]}
+
+USER-SELECTED MCQ:
+{chr(10).join(picked) if picked else '(none provided)'}
+
+Return ONLY valid JSON (no markdown, no code fences) matching exactly this shape:
 {{
-  "summary": "2-3 sentence overview of what this dosha means for their {surface} and the guiding principle for care",
+  "vision_notes": "1-2 sentence summary of what the selfie shows, or empty string if no selfie",
+  "lab_notes": "1-2 sentence summary of relevant lab findings, or empty string if no lab report",
+  "constitution_read": "3-4 sentence explanation of what this dosha means for their {surface} + what's likely driving THEIR specific presentation",
   "routine": [
     {{"time": "Morning", "step": "Concise step", "why": "One-line Ayurvedic + modern reason"}},
-    {{"time": "Morning", "step": "...", "why": "..."}},
     {{"time": "Evening", "step": "...", "why": "..."}},
     {{"time": "Weekly", "step": "...", "why": "..."}}
   ],
   "key_ingredients": [
-    {{"name": "Ingredient name", "role": "What it does for this dosha"}}
+    {{"name": "Ingredient", "role": "What it does for this dosha"}}
   ],
-  "avoid": ["Specific ingredient/practice to avoid", "..."],
-  "do": ["Actionable daily habit", "..."],
-  "dont": ["Habit to stop", "..."],
+  "diet": {{
+    "favor": ["food/practice", "..."],
+    "reduce": ["food/practice", "..."]
+  }},
+  "daily_practice": [
+    "Actionable daily/weekly habit specific to their constitution and presentation"
+  ],
+  "avoid": ["Specific ingredient/practice to avoid based on their intake", "..."],
   "herbs": [
     {{"name": "Herb", "usage": "How to use it — internal or topical"}}
-  ]
+  ],
+  "when_to_see_doctor": ["Specific escalation signal (e.g. 'if breakouts turn painful and warm')"]
 }}
 
 Constraints:
-- routine: exactly 4-6 items covering Morning, Evening, and Weekly.
-- key_ingredients: 4-6 items
-- avoid: 3-5 items
-- do: 4-6 items
-- dont: 3-5 items
-- herbs: 3-5 items
-- Focus specifically on {surface}, not general wellness.
-- Be concrete: name real ingredients (e.g. "sandalwood powder", "bhringraj oil") not vague categories.
+- routine: 5-7 items covering Morning, Evening, and Weekly.
+- key_ingredients: 5-7 items with real Ayurvedic + modern names.
+- diet.favor: 5-8 items; diet.reduce: 4-6 items.
+- daily_practice: 4-6 items.
+- avoid: 4-6 items.
+- herbs: 3-5 items.
+- when_to_see_doctor: 2-4 items.
+- Be concrete: name specific ingredients (e.g. "sandalwood powder", "bhringraj oil").
+- Personalise based on the user's chat and MCQ answers — do not give a generic dosha report.
 """
 
-    chat = LlmChat(
+    # Attach images if provided
+    file_contents = []
+    if selfie_b64:
+        file_contents.append(ImageContent(image_base64=selfie_b64))
+    if lab_b64 and lab_mime and lab_mime.startswith("image/"):
+        file_contents.append(ImageContent(image_base64=lab_b64))
+
+    session_id = f"report-{uuid.uuid4().hex[:12]}"
+    llm = LlmChat(
         api_key=EMERGENT_LLM_KEY,
         session_id=session_id,
         system_message=system_prompt,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    ).with_model("openai", "gpt-4o")
 
-    response = await chat.send_message(UserMessage(text=prompt))
+    msg = UserMessage(text=user_text, file_contents=file_contents or None)
+    response = await llm.send_message(msg)
     text = str(response).strip()
 
-    # Strip potential code fences
+    # Strip code fences if any
     if text.startswith("```"):
         text = text.split("```")[1]
         if text.startswith("json"):
@@ -360,13 +311,11 @@ Constraints:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        # find first { and last }
-        start = text.find("{")
-        end = text.rfind("}")
+        start, end = text.find("{"), text.rfind("}")
         if start >= 0 and end > start:
             data = json.loads(text[start:end + 1])
         else:
-            raise HTTPException(500, "AI response could not be parsed")
+            raise HTTPException(500, "AI report could not be parsed.")
     return data
 
 
@@ -375,128 +324,384 @@ Constraints:
 # -----------------------------------------------------------------------------
 @api.get("/health")
 async def health():
-    return {"status": "ok", "service": "prakritidx", "time": datetime.now(timezone.utc).isoformat()}
+    return {
+        "status": "ok",
+        "service": "prakritidx",
+        "razorpay_configured": bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET),
+        "time": _now(),
+    }
 
 
-@api.get("/quiz/{category}")
-async def get_quiz(category: Category):
-    """Return the quiz questions formatted for skin or hair."""
-    surface = "skin" if category == "skin" else "hair"
-    formatted = []
-    for q in QUIZ_QUESTIONS:
-        formatted.append({
-            "id": q["id"],
-            "prompt": q["prompt"].format(surface=surface),
-            "options": [
-                {
-                    "value": opt["value"],
-                    "label": opt.get(f"label_{category}", opt.get("label_skin", "")),
-                }
-                for opt in q["options"]
-            ],
+@api.get("/intake/{category}")
+async def get_intake_schema(category: Category):
+    return {"category": category, "questions": get_questions(category)}
+
+
+# ---- Uploads ---------------------------------------------------------------
+_ALLOWED_IMG = {"image/jpeg", "image/png", "image/webp"}
+_ALLOWED_LAB = {"image/jpeg", "image/png", "image/webp", "application/pdf"}
+_MAX_UPLOAD = 6 * 1024 * 1024  # 6 MB
+
+
+@api.post("/upload/selfie")
+async def upload_selfie(session_id: str = Form(...), file: UploadFile = File(...)):
+    if file.content_type not in _ALLOWED_IMG:
+        raise HTTPException(400, "Selfie must be JPEG, PNG, or WEBP.")
+    data = await file.read()
+    if len(data) > _MAX_UPLOAD:
+        raise HTTPException(400, "Image is too large (max 6MB).")
+    upload_id = f"selfie_{uuid.uuid4().hex[:12]}"
+    b64 = base64.b64encode(data).decode()
+    await db.uploads.insert_one({
+        "upload_id": upload_id,
+        "session_id": session_id,
+        "kind": "selfie",
+        "mime": file.content_type,
+        "b64": b64,
+        "size": len(data),
+        "created_at": _now(),
+    })
+    return {"upload_id": upload_id, "size": len(data), "mime": file.content_type}
+
+
+@api.post("/upload/lab-report")
+async def upload_lab(session_id: str = Form(...), file: UploadFile = File(...)):
+    if file.content_type not in _ALLOWED_LAB:
+        raise HTTPException(400, "Lab report must be JPEG, PNG, WEBP, or PDF.")
+    data = await file.read()
+    if len(data) > _MAX_UPLOAD:
+        raise HTTPException(400, "Report is too large (max 6MB).")
+    upload_id = f"lab_{uuid.uuid4().hex[:12]}"
+    b64 = base64.b64encode(data).decode()
+    await db.uploads.insert_one({
+        "upload_id": upload_id,
+        "session_id": session_id,
+        "kind": "lab",
+        "mime": file.content_type,
+        "b64": b64,
+        "size": len(data),
+        "created_at": _now(),
+    })
+    return {"upload_id": upload_id, "size": len(data), "mime": file.content_type}
+
+
+# ---- Intake submit + safety check -----------------------------------------
+@api.post("/intake/submit")
+async def submit_intake(payload: IntakeSubmit):
+    # 1) SAFETY CHECK — runs FIRST, before anything else touches the input
+    free_texts = [payload.chat_text or ""] + [
+        a.free_text for a in payload.answers if a.free_text
+    ]
+    reason = check_medical_urgency(free_texts)
+    if reason:
+        # Persist that this session was blocked for this category (audit trail).
+        await db.safety_blocks.insert_one({
+            "session_id": payload.session_id,
+            "category": payload.category,
+            "reason": reason,
+            "at": _now(),
         })
-    return {"category": category, "questions": formatted, "total": len(formatted)}
+        return {
+            "blocked": True,
+            "reason": reason,
+            "message": BLOCK_MESSAGE,
+        }
 
+    # 2) Fetch uploaded content (if any)
+    selfie_b64 = None
+    lab_b64 = None
+    lab_mime = None
+    if payload.selfie_upload_id:
+        up = await db.uploads.find_one({"upload_id": payload.selfie_upload_id})
+        if up:
+            selfie_b64 = up["b64"]
+    if payload.lab_upload_id:
+        up = await db.uploads.find_one({"upload_id": payload.lab_upload_id})
+        if up:
+            lab_b64 = up["b64"]
+            lab_mime = up["mime"]
 
-@api.post("/quiz/submit", response_model=QuizResult)
-async def submit_quiz(payload: QuizSubmission):
-    if len(payload.answers) < 6:
-        raise HTTPException(400, "Answer more questions to get a reliable result.")
-
-    result = compute_dosha(payload.answers)
-
-    doc = {
-        "id": str(uuid.uuid4()),
+    intake_doc = {
         "session_id": payload.session_id,
         "category": payload.category,
+        "chat_text": payload.chat_text,
         "answers": [a.model_dump() for a in payload.answers],
-        "scores": result["scores"],
-        "primary_dosha": result["primary"],
-        "secondary_dosha": result["secondary"],
-        "dosha_label": result["label"],
-        "submitted_at": datetime.now(timezone.utc).isoformat(),
+        "selfie_upload_id": payload.selfie_upload_id,
+        "lab_upload_id": payload.lab_upload_id,
+        "selfie_b64": selfie_b64,
+        "lab_b64": lab_b64,
+        "lab_mime": lab_mime,
+        "submitted_at": _now(),
     }
-    await db.quiz_results.insert_one(doc)
-
-    return QuizResult(
-        session_id=payload.session_id,
-        category=payload.category,
-        primary_dosha=result["primary"],
-        secondary_dosha=result["secondary"],
-        scores=DoshaScores(**result["scores"]),
-        dosha_label=result["label"],
-        submitted_at=doc["submitted_at"],
+    # Upsert per (session, category)
+    await db.intakes.replace_one(
+        {"session_id": payload.session_id, "category": payload.category},
+        intake_doc,
+        upsert=True,
     )
 
+    return {"blocked": False, "message": "Intake received."}
 
-@api.post("/recommendations", response_model=Recommendations)
-async def get_recommendations(payload: RecommendationRequest):
-    # Check cache first
-    cache_key = {
+
+# ---- Free hook (partial dosha read) ---------------------------------------
+@api.post("/free-hook")
+async def free_hook(payload: ReportRequest):
+    intake = await _get_intake(payload.session_id, payload.category)
+    if not intake:
+        raise HTTPException(404, "No intake found. Please complete the intake first.")
+
+    # SAFETY re-check (belt-and-suspenders)
+    reason = check_medical_urgency(_collect_free_text(intake))
+    if reason:
+        return {"blocked": True, "message": BLOCK_MESSAGE, "reason": reason}
+
+    dosha = _tally_dosha_from_intake(payload.category, intake)
+    frame = DOSHA_HINTS[payload.category][dosha]["frame"]
+    teaser = await _generate_teaser_line(payload.category, dosha, intake)
+
+    return {
+        "blocked": False,
+        "category": payload.category,
+        "dosha": dosha,
+        "dosha_label": dosha.capitalize(),
+        "hook": f"{frame} {teaser}".strip(),
+        "frame": frame,
+        "teaser": teaser,
+    }
+
+
+# ---- Payments (Razorpay Payment Links) ------------------------------------
+@api.post("/payments/create-link")
+async def create_payment_link(payload: PaymentCreate):
+    # Do NOT allow payment if the session was medically blocked for this category
+    block = await db.safety_blocks.find_one({
         "session_id": payload.session_id,
         "category": payload.category,
-        "primary_dosha": payload.primary_dosha,
-        "secondary_dosha": payload.secondary_dosha,
+    })
+    if block:
+        raise HTTPException(400, "This session cannot proceed to payment for safety reasons.")
+
+    amount = PRICE_SINGLE_PAISE if payload.plan == "single" else PRICE_COMBO_PAISE
+    description = PRODUCT_LABEL[payload.plan]
+
+    reference_id = f"pdx_{uuid.uuid4().hex[:16]}"
+    client_rzp = rzp()
+
+    callback_url = f"{APP_PUBLIC_URL}/?session_id={payload.session_id}&paid_ref={reference_id}"
+
+    link_payload = {
+        "amount": amount,
+        "currency": "INR",
+        "accept_partial": False,
+        "reference_id": reference_id,
+        "description": description,
+        "customer": {"name": "PrakritiDx User"},
+        "notify": {"sms": False, "email": False},
+        "reminder_enable": False,
+        "notes": {
+            "session_id": payload.session_id,
+            "plan": payload.plan,
+            "category": payload.category,
+        },
+        "callback_url": callback_url,
+        "callback_method": "get",
     }
-    cached = await db.recommendations.find_one(cache_key)
+
+    try:
+        link = client_rzp.payment_link.create(link_payload)
+    except Exception as e:
+        logger.exception("Razorpay create_link failed")
+        raise HTTPException(500, f"Could not create payment link: {e}")
+
+    doc = {
+        "reference_id": reference_id,
+        "session_id": payload.session_id,
+        "plan": payload.plan,
+        "category": payload.category,
+        "amount": amount,
+        "razorpay_link_id": link.get("id"),
+        "short_url": link.get("short_url"),
+        "status": "pending",
+        "created_at": _now(),
+    }
+    await db.payments.insert_one(doc)
+
+    return {
+        "reference_id": reference_id,
+        "payment_link_id": link.get("id"),
+        "short_url": link.get("short_url"),
+        "amount": amount,
+        "amount_rupees": amount // 100,
+        "plan": payload.plan,
+    }
+
+
+@api.get("/payments/status/{session_id}")
+async def payments_status(session_id: str):
+    """Return unlock state for a session. Combo unlocks both, single unlocks only its own category."""
+    combo_paid = False
+    unlocked = {"skin": False, "hair": False}
+    cursor = db.payments.find({"session_id": session_id, "status": "paid"})
+    async for p in cursor:
+        if p.get("plan") == "combo":
+            combo_paid = True
+            unlocked["skin"] = True
+            unlocked["hair"] = True
+        elif p.get("plan") == "single":
+            unlocked[p.get("category", "skin")] = True
+    return {"session_id": session_id, "combo_paid": combo_paid, "unlocked": unlocked}
+
+
+@api.post("/payments/verify")
+async def payments_verify(session_id: str = Body(..., embed=True), reference_id: Optional[str] = Body(None, embed=True)):
+    """
+    Polling endpoint. If a matching payment is not yet 'paid' locally, we query Razorpay
+    for the latest link status and update our DB.
+    """
+    query = {"session_id": session_id}
+    if reference_id:
+        query["reference_id"] = reference_id
+    payment = await db.payments.find_one(query, sort=[("created_at", -1)])
+    if not payment:
+        return {"status": "no_payment"}
+
+    if payment["status"] != "paid":
+        # Ask Razorpay for the current state
+        try:
+            link = rzp().payment_link.fetch(payment["razorpay_link_id"])
+            status = link.get("status")  # created, partially_paid, paid, expired, cancelled
+            if status == "paid":
+                await db.payments.update_one(
+                    {"_id": payment["_id"]},
+                    {"$set": {"status": "paid", "paid_at": _now(), "raw_status": status}},
+                )
+                payment["status"] = "paid"
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("Razorpay fetch failed")
+            return {"status": payment["status"], "error": str(e)}
+
+    return {
+        "status": payment["status"],
+        "plan": payment["plan"],
+        "category": payment["category"],
+        "reference_id": payment["reference_id"],
+    }
+
+
+@api.post("/payments/webhook")
+async def payments_webhook(request: Request):
+    body = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+
+    # Verify signature if webhook secret configured
+    if RAZORPAY_WEBHOOK_SECRET:
+        expected = hmac.new(
+            RAZORPAY_WEBHOOK_SECRET.encode(),
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(expected, signature):
+            raise HTTPException(400, "Invalid webhook signature.")
+
+    try:
+        event = json.loads(body.decode("utf-8"))
+    except Exception:
+        raise HTTPException(400, "Invalid webhook body.")
+
+    event_type = event.get("event")
+    entity = (event.get("payload") or {}).get("payment_link", {}).get("entity") or \
+             (event.get("payload") or {}).get("payment", {}).get("entity") or {}
+    link_id = entity.get("id") or entity.get("payment_link_id")
+    reference_id = entity.get("reference_id")
+
+    if event_type in ("payment_link.paid", "payment.captured") and (link_id or reference_id):
+        q = {}
+        if link_id:
+            q["razorpay_link_id"] = link_id
+        elif reference_id:
+            q["reference_id"] = reference_id
+        await db.payments.update_one(q, {"$set": {"status": "paid", "paid_at": _now(), "raw_event": event_type}})
+
+    return {"ok": True}
+
+
+# ---- Full report (only if paid) -------------------------------------------
+@api.post("/report/full")
+async def full_report(payload: ReportRequest):
+    # 0) unlock check
+    status_resp = await payments_status(payload.session_id)
+    if not status_resp["unlocked"].get(payload.category):
+        raise HTTPException(402, "Payment required. This report is locked until payment is confirmed.")
+
+    # 1) intake must exist
+    intake = await _get_intake(payload.session_id, payload.category)
+    if not intake:
+        raise HTTPException(404, "No intake found for this category — please complete it first.")
+
+    # 2) safety re-check
+    reason = check_medical_urgency(_collect_free_text(intake))
+    if reason:
+        return {"blocked": True, "message": BLOCK_MESSAGE, "reason": reason}
+
+    # 3) cached?
+    cached = await db.reports.find_one({
+        "session_id": payload.session_id,
+        "category": payload.category,
+    })
     if cached:
         cached.pop("_id", None)
         return cached
 
-    dosha_label = payload.primary_dosha.capitalize()
-    if payload.secondary_dosha:
-        dosha_label = f"{payload.primary_dosha.capitalize()}-{payload.secondary_dosha.capitalize()}"
-
+    # 4) generate
+    dosha = _tally_dosha_from_intake(payload.category, intake)
     try:
-        ai_data = await generate_ai_recommendations(
-            payload.category, dosha_label, payload.primary_dosha, payload.secondary_dosha
-        )
+        data = await _generate_full_report(payload.category, dosha, intake)
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.exception("AI generation failed")
-        raise HTTPException(500, f"Could not generate recommendations: {str(e)}")
+        logger.exception("Full report generation failed")
+        raise HTTPException(500, f"Report generation failed: {e}")
 
-    rec = {
-        **cache_key,
-        "dosha_label": dosha_label,
-        "summary": ai_data.get("summary", ""),
-        "routine": ai_data.get("routine", []),
-        "key_ingredients": ai_data.get("key_ingredients", []),
-        "avoid": ai_data.get("avoid", []),
-        "do": ai_data.get("do", []),
-        "dont": ai_data.get("dont", []),
-        "herbs": ai_data.get("herbs", []),
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.recommendations.insert_one(dict(rec))
-    rec.pop("_id", None)
-    return rec
-
-
-@api.get("/ingredients/{category}/{dosha}")
-async def get_ingredients(category: Category, dosha: Dosha):
-    return {
-        "category": category,
+    result = {
+        "session_id": payload.session_id,
+        "category": payload.category,
         "dosha": dosha,
-        "items": INGREDIENT_LIBRARY[category][dosha],
+        "dosha_label": dosha.capitalize(),
+        "generated_at": _now(),
+        **data,
     }
+    await db.reports.insert_one(dict(result))
+    return result
 
 
-@api.get("/dosha/meta")
-async def dosha_meta():
-    return DOSHA_META
+# ---- Utilities -------------------------------------------------------------
+@api.get("/session/{session_id}/state")
+async def session_state(session_id: str):
+    intakes = {}
+    for cat in ("skin", "hair"):
+        i = await _get_intake(session_id, cat)
+        if i:
+            i.pop("selfie_b64", None)
+            i.pop("lab_b64", None)
+            intakes[cat] = {
+                "submitted_at": i.get("submitted_at"),
+                "has_selfie": bool(i.get("selfie_upload_id")),
+                "has_lab": bool(i.get("lab_upload_id")),
+            }
+    payments = await payments_status(session_id)
+    blocked = {}
+    for cat in ("skin", "hair"):
+        b = await db.safety_blocks.find_one({"session_id": session_id, "category": cat})
+        if b:
+            blocked[cat] = b.get("reason")
+    return {"session_id": session_id, "intakes": intakes, "payments": payments, "blocked": blocked}
 
 
-@api.get("/results/{session_id}")
-async def get_session_results(session_id: str):
-    cursor = db.quiz_results.find({"session_id": session_id}).sort("submitted_at", -1)
-    out = []
-    async for doc in cursor:
-        doc.pop("_id", None)
-        out.append(doc)
-    return {"session_id": session_id, "results": out}
-
-
-# CORS
+# -----------------------------------------------------------------------------
+# App wiring
+# -----------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in CORS_ORIGINS.split(",")] if CORS_ORIGINS != "*" else ["*"],
@@ -504,10 +709,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 app.include_router(api)
 
 
 @app.get("/")
 async def root():
-    return {"app": "PrakritiDx", "status": "running"}
+    return {"app": "PrakritiDx", "version": "2.0.0", "status": "running"}

@@ -1,6 +1,6 @@
 import React from "react";
 import { motion } from "framer-motion";
-import { ArrowRight, Leaf, Sparkles, RotateCcw } from "lucide-react";
+import { ArrowRight, Sparkles, Leaf, Lock, Unlock } from "lucide-react";
 
 const HERO_IMAGES = {
   skin: "https://images.pexels.com/photos/7019484/pexels-photo-7019484.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
@@ -11,33 +11,32 @@ const COPY = {
   skin: {
     eyebrow: "Skin · Prakriti",
     title: "Skin that reads your constitution.",
-    sub: "A 2-minute Ayurvedic assessment reveals your dominant dosha and a science-backed skincare rhythm tuned to how your skin actually behaves.",
-    cta: "Take the Skin Prakriti Quiz",
+    sub: "Share what you're seeing — in words, a selfie, or a lab report. We map it to your dosha, then unlock a routine, ingredients, and diet built precisely for you.",
+    cta: "Begin your Skin intake",
     stats: [
-      { k: "12", v: "Questions" },
-      { k: "3", v: "Doshas mapped" },
-      { k: "AI", v: "Personalized" },
+      { k: "Chat", v: "in your words" },
+      { k: "Selfie", v: "AI vision" },
+      { k: "Report", v: "personalized" },
     ],
   },
   hair: {
     eyebrow: "Hair · Prakriti",
-    title: "Hair care rewritten by your dosha.",
-    sub: "Discover the Ayurvedic constitution behind your scalp and strands, then get a modern routine of oils, herbs, and habits tailored to you.",
-    cta: "Take the Hair Prakriti Quiz",
+    title: "Hair care, precisely mapped to you.",
+    sub: "Tell us what's happening with your scalp and strands. Add a selfie or a lab report. Unlock a routine, ingredients, and diet crafted for your dosha and your presentation.",
+    cta: "Begin your Hair intake",
     stats: [
-      { k: "12", v: "Questions" },
-      { k: "3", v: "Doshas mapped" },
-      { k: "AI", v: "Personalized" },
+      { k: "Chat", v: "in your words" },
+      { k: "Selfie", v: "AI vision" },
+      { k: "Report", v: "personalized" },
     ],
   },
 };
 
-export default function Landing({ category, onStart, onViewResult }) {
+export default function Landing({ category, onStart, onViewLast, unlocked, onViewReport }) {
   const c = COPY[category];
 
   return (
     <div className="pb-8" data-testid={`landing-${category}`}>
-      {/* Hero image */}
       <motion.div
         initial={{ opacity: 0, scale: 0.98 }}
         animate={{ opacity: 1, scale: 1 }}
@@ -71,7 +70,6 @@ export default function Landing({ category, onStart, onViewResult }) {
         </div>
       </motion.div>
 
-      {/* Headline */}
       <motion.h1
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
@@ -91,10 +89,8 @@ export default function Landing({ category, onStart, onViewResult }) {
         {c.sub}
       </motion.p>
 
-      {/* Gold divider */}
       <div className="gold-divider my-7" />
 
-      {/* Stats row */}
       <div className="grid grid-cols-3 gap-3 mb-8">
         {c.stats.map((s, i) => (
           <motion.div
@@ -105,7 +101,7 @@ export default function Landing({ category, onStart, onViewResult }) {
             className="rounded-2xl bg-white p-4 border border-[#5C7A5A]/10 shadow-soft"
             data-testid={`stat-${i}`}
           >
-            <div className="font-display text-2xl text-ink leading-none">{s.k}</div>
+            <div className="font-display text-xl text-ink leading-none">{s.k}</div>
             <div className="text-[10px] tracking-widest uppercase text-ink/50 mt-2">
               {s.v}
             </div>
@@ -113,57 +109,61 @@ export default function Landing({ category, onStart, onViewResult }) {
         ))}
       </div>
 
-      {/* CTAs */}
       <div className="flex flex-col gap-3">
         <button
           onClick={onStart}
           className="btn-primary justify-center"
-          data-testid="start-quiz-btn"
+          data-testid="start-intake-btn"
         >
           <Sparkles size={16} />
           {c.cta}
           <ArrowRight size={16} />
         </button>
 
-        {onViewResult && (
+        {unlocked && onViewReport && (
           <button
-            onClick={onViewResult}
+            onClick={onViewReport}
             className="btn-ghost justify-center"
-            data-testid="view-result-btn"
+            data-testid="view-report-btn"
+            style={{ borderColor: "rgba(217,164,65,0.5)" }}
           >
-            <RotateCcw size={14} />
-            View your last {category} result
+            <Unlock size={14} style={{ color: "#B8632F" }} />
+            View my unlocked {category} report
+          </button>
+        )}
+
+        {!unlocked && onViewLast && (
+          <button
+            onClick={onViewLast}
+            className="btn-ghost justify-center"
+            data-testid="view-last-hook-btn"
+          >
+            <Lock size={13} />
+            Continue your last {category} read
           </button>
         )}
       </div>
 
-      {/* Tri-dosha primer */}
-      <div className="mt-10">
-        <span className="eyebrow">The Three Doshas</span>
-        <div className="mt-4 space-y-3">
+      <div className="mt-10 rounded-2xl bg-white p-5 border border-[#5C7A5A]/10 shadow-soft">
+        <span className="eyebrow">How it works</span>
+        <ol className="mt-3 space-y-2.5 text-[13.5px] text-ink/75 leading-relaxed">
           {[
-            { name: "Vata", desc: "Air & Space · dry, light, mobile", color: "#8B7BAA" },
-            { name: "Pitta", desc: "Fire & Water · hot, sharp, intense", color: "#B8632F" },
-            { name: "Kapha", desc: "Earth & Water · heavy, cool, stable", color: "#5C7A5A" },
-          ].map((d) => (
-            <div
-              key={d.name}
-              className="flex items-center gap-4 rounded-2xl bg-white p-4 border border-[#5C7A5A]/10 shadow-soft card-lift"
-              data-testid={`dosha-primer-${d.name.toLowerCase()}`}
-            >
-              <div
-                className="w-10 h-10 rounded-full flex items-center justify-center font-display text-lg text-white"
-                style={{ background: d.color }}
+            "Share your concern in your own words + selfie or lab report (optional).",
+            "Answer 6 quick multi-select questions.",
+            "Get a free glimpse of your dosha read.",
+            "Unlock the full routine, ingredients & diet for ₹99 (or ₹149 for Skin + Hair).",
+          ].map((s, i) => (
+            <li key={i} className="flex gap-3">
+              <span
+                className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-medium flex-shrink-0"
+                style={{ background: "rgba(217,164,65,0.18)", color: "#B8632F" }}
               >
-                {d.name[0]}
-              </div>
-              <div className="flex-1">
-                <div className="font-display text-lg text-ink leading-tight">{d.name}</div>
-                <div className="text-xs text-ink/60 mt-0.5">{d.desc}</div>
-              </div>
-            </div>
+                {i + 1}
+              </span>
+              <span>{s}</span>
+            </li>
           ))}
-        </div>
+        </ol>
       </div>
     </div>
   );

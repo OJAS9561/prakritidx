@@ -1,55 +1,99 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import AppShell from "./components/AppShell";
 import Landing from "./components/Landing";
-import DoshaFlow from "./components/DoshaFlow";
-import ResultsScreen from "./components/ResultsScreen";
-import Recommendations from "./components/Recommendations";
+import IntakeFlow from "./components/IntakeFlow";
+import SafetyBlock from "./components/SafetyBlock";
+import FreeHook from "./components/FreeHook";
+import PayGate from "./components/PayGate";
+import FullReport from "./components/FullReport";
 import { getOrCreateSessionId } from "./lib/session";
+import { getPaymentStatus } from "./lib/api";
 import "./App.css";
 
 /**
- * PrakritiDx — mobile-first Ayurvedic skin & hair guidance.
- * The app is fully parameterized by `category` (skin | hair). Same components render both.
- * Stages: landing → quiz → result → recommendations
+ * PrakritiDx v2 — chat + selfie + lab + fixed MCQ intake → safety check →
+ * free hook → payment gate → full AI report. Fully parameterized by `category`.
+ *
+ * Stage machine (per category, persisted in localStorage):
+ *   landing → intake → safety_blocked (terminal) | free_hook → pay → report
  */
 export default function App() {
   const [category, setCategory] = useState("skin");
-  const [stage, setStage] = useState("landing"); // landing | quiz | result | recommendations
-  const [result, setResult] = useState(null); // quiz result for the CURRENT session+category
+  const [stage, setStage] = useState("landing");
+  const [intakeAck, setIntakeAck] = useState(null); // { blocked, message?, reason? }
+  const [hook, setHook] = useState(null); // { hook, dosha, dosha_label }
+  const [paymentInfo, setPaymentInfo] = useState(null); // { plan, unlocked }
+  const [unlockedMap, setUnlockedMap] = useState({ skin: false, hair: false });
+
   const sessionId = useMemo(() => getOrCreateSessionId(), []);
+  const stateKey = `prakritidx:v2:${category}`;
 
-  // Persist per-category stage & result in localStorage so switching Skin<>Hair keeps context
-  const stateKey = `prakritidx:state:${category}`;
-
+  // hydrate per-category state on category change
   useEffect(() => {
-    // hydrate stage/result for the newly-selected category
     try {
       const saved = JSON.parse(localStorage.getItem(stateKey) || "null");
-      if (saved && saved.stage) {
-        setStage(saved.stage);
-        setResult(saved.result || null);
+      if (saved) {
+        setStage(saved.stage || "landing");
+        setIntakeAck(saved.intakeAck || null);
+        setHook(saved.hook || null);
+        setPaymentInfo(saved.paymentInfo || null);
       } else {
         setStage("landing");
-        setResult(null);
+        setIntakeAck(null);
+        setHook(null);
+        setPaymentInfo(null);
       }
     } catch {
       setStage("landing");
-      setResult(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category]);
 
+  // persist per-category state
   useEffect(() => {
     try {
-      localStorage.setItem(stateKey, JSON.stringify({ stage, result }));
+      localStorage.setItem(
+        stateKey,
+        JSON.stringify({ stage, intakeAck, hook, paymentInfo })
+      );
     } catch {
       /* ignore */
     }
-  }, [stage, result, stateKey]);
+  }, [stage, intakeAck, hook, paymentInfo, stateKey]);
+
+  // Poll unlock status on load and after payments
+  const refreshUnlockStatus = useCallback(async () => {
+    try {
+      const data = await getPaymentStatus(sessionId);
+      setUnlockedMap(data.unlocked || { skin: false, hair: false });
+      return data;
+    } catch {
+      return null;
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    refreshUnlockStatus();
+    // If URL has ?paid_ref, trigger a status check
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("paid_ref")) {
+      // Give the webhook a moment then poll
+      setTimeout(refreshUnlockStatus, 800);
+    }
+  }, [refreshUnlockStatus]);
+
+  // If the current category becomes unlocked (via combo, or from previous session), auto-progress
+  useEffect(() => {
+    if (unlockedMap[category] && stage === "pay") {
+      setStage("report");
+    }
+  }, [unlockedMap, category, stage]);
 
   const restart = () => {
-    setResult(null);
+    setIntakeAck(null);
+    setHook(null);
+    setPaymentInfo(null);
     setStage("landing");
     try {
       localStorage.removeItem(stateKey);
@@ -63,45 +107,76 @@ export default function App() {
       <AnimatePresence mode="wait">
         <motion.div
           key={`${category}-${stage}`}
-          initial={{ opacity: 0, y: 12 }}
+          initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }}
-          transition={{ duration: 0.35, ease: [0.2, 0.8, 0.2, 1] }}
+          exit={{ opacity: 0, y: -6 }}
+          transition={{ duration: 0.32, ease: [0.2, 0.8, 0.2, 1] }}
           className="w-full"
         >
           {stage === "landing" && (
             <Landing
               category={category}
-              onStart={() => setStage("quiz")}
-              onViewResult={result ? () => setStage("result") : null}
+              onStart={() => setStage("intake")}
+              onViewLast={hook ? () => setStage("free_hook") : null}
+              unlocked={unlockedMap[category]}
+              onViewReport={
+                unlockedMap[category] ? () => setStage("report") : null
+              }
             />
           )}
-          {stage === "quiz" && (
-            <DoshaFlow
+
+          {stage === "intake" && (
+            <IntakeFlow
               category={category}
               sessionId={sessionId}
-              onComplete={(r) => {
-                setResult(r);
-                setStage("result");
-              }}
               onExit={() => setStage("landing")}
+              onSubmitted={(ack) => {
+                setIntakeAck(ack);
+                if (ack.blocked) setStage("safety_blocked");
+                else setStage("free_hook");
+              }}
             />
           )}
-          {stage === "result" && result && (
-            <ResultsScreen
-              category={category}
-              result={result}
-              onSeeRoutine={() => setStage("recommendations")}
-              onRetake={restart}
-            />
+
+          {stage === "safety_blocked" && (
+            <SafetyBlock message={intakeAck?.message} />
           )}
-          {stage === "recommendations" && result && (
-            <Recommendations
+
+          {stage === "free_hook" && (
+            <FreeHook
               category={category}
               sessionId={sessionId}
-              result={result}
-              onBack={() => setStage("result")}
+              onHookLoaded={setHook}
+              onBlocked={(ack) => {
+                setIntakeAck(ack);
+                setStage("safety_blocked");
+              }}
+              onUnlock={() => setStage("pay")}
               onRestart={restart}
+              existingHook={hook}
+            />
+          )}
+
+          {stage === "pay" && (
+            <PayGate
+              category={category}
+              sessionId={sessionId}
+              hook={hook}
+              onPaid={async () => {
+                await refreshUnlockStatus();
+                setStage("report");
+              }}
+              onBack={() => setStage("free_hook")}
+            />
+          )}
+
+          {stage === "report" && (
+            <FullReport
+              category={category}
+              sessionId={sessionId}
+              onRestart={restart}
+              onSwitchCategory={(next) => setCategory(next)}
+              unlockedMap={unlockedMap}
             />
           )}
         </motion.div>
