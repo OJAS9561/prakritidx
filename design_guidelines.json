@@ -1,0 +1,143 @@
+{
+  "theme": "Organic & Earthy / Premium Ayurveda",
+  "typography": {
+    "headings": {
+      "family": "Fraunces, Georgia, serif",
+      "strategy": "Warm, premium serif for wordmark, section headers, and quiz titles. Apply tracking-tight and leading-tight for large text. Use elegant weights (Light to SemiBold).",
+      "scale": {
+        "h1": "text-4xl sm:text-5xl font-medium tracking-tight text-ink",
+        "h2": "text-2xl sm:text-3xl font-medium tracking-tight text-ink",
+        "h3": "text-xl sm:text-2xl font-medium text-ink",
+        "h4": "text-lg sm:text-xl font-medium text-ink"
+      }
+    },
+    "body": {
+      "family": "Inter, system-ui, sans-serif",
+      "strategy": "Clean sans-serif for UI, buttons, body copy, and navigation. Use tracking-normal and leading-relaxed for optimal readability.",
+      "scale": {
+        "base": "text-base text-ink/80",
+        "small": "text-sm text-ink/70",
+        "labels": "text-xs font-semibold tracking-wider uppercase text-deep-sage"
+      }
+    }
+  },
+  "colors": {
+    "primary": {
+      "DEFAULT": "#5C7A5A",
+      "description": "Sage green. Use for primary buttons, active tab states, and key highlights."
+    },
+    "deep_sage": {
+      "DEFAULT": "#3A4F3A",
+      "description": "Darker sage for typography emphasis, borders, and deeper contrast UI elements."
+    },
+    "accent": {
+      "DEFAULT": "#B8632F",
+      "description": "Copper accent. Use sparingly for progress bars, secondary buttons, or specific highlights."
+    },
+    "accent_light": {
+      "DEFAULT": "#D98A4E",
+      "description": "Lighter copper for subtle gradient accents or hovering states of copper elements."
+    },
+    "gold": {
+      "DEFAULT": "#D9A441",
+      "description": "Turmeric/gold. Use VERY SPARINGLY as an accent (prices, dividers, premium badges, quiz selection rings)."
+    },
+    "background": {
+      "DEFAULT": "#FAF7F0",
+      "description": "Cream background. DO NOT USE PURE WHITE for main backgrounds. This is the app base."
+    },
+    "surface": {
+      "DEFAULT": "#FFFFFF",
+      "description": "White surface for cards floating on the cream background to create soft depth."
+    },
+    "ink": {
+      "DEFAULT": "#2B2B26",
+      "description": "Ink text. Primary text color, never use pure black."
+    },
+    "rules": [
+      "DO NOT use Inter or standard sans for headings. Headings must be Fraunces.",
+      "Gold (#D9A441) should be an accent only, not a primary button color.",
+      "Background should be Cream (#FAF7F0) to evoke organic warmth.",
+      "Ensure contrast passes APCA/WCAG standards on buttons and text."
+    ]
+  },
+  "visual_enhancers": {
+    "shadows": {
+      "soft_card": "shadow-[0_8px_30px_rgb(43,43,38,0.05)]",
+      "hover_card": "shadow-[0_20px_40px_rgb(43,43,38,0.08)]"
+    },
+    "radii": {
+      "card": "rounded-2xl",
+      "button": "rounded-full",
+      "input": "rounded-xl"
+    },
+    "borders": {
+      "subtle": "border border-[#5C7A5A]/10",
+      "active": "border-2 border-[#5C7A5A]"
+    }
+  },
+  "layouts": {
+    "app_shell": "Mobile-first PWA wrapper. Fixed top header (white or translucent cream with backdrop blur, NEVER fully transparent). Header contains wordmark 'PrakritiDx', tagline 'Know Your Constitution' (small serif or mono), and the Skin/Hair toggle.",
+    "section_toggle": "Pill-shaped toggle in header or directly below header. Active state uses Sage Green (#5C7A5A) background with white text, inactive uses transparent background with Ink text.",
+    "spacing": "Generous spacing. Use p-6 or p-8 for card internals. gap-6 between major sections. Generous bottom padding to account for safe areas.",
+    "cards": "White surface (#FFFFFF) cards sitting on Cream (#FAF7F0) background with soft shadows and rounded-2xl.",
+    "quiz_flow": "Immersive full-height screens. Large typography for questions. Single choice cards stacked vertically with ample padding. Progress bar at top (Copper or Gold)."
+  },
+  "motion": {
+    "page_transition": "Subtle fade and upward slide (framer-motion) when switching between Skin and Hair.",
+    "micro_interactions": "Hover states on cards lift up (-translate-y-1) and increase shadow. Tab toggle uses layoutId (framer-motion) for the sliding pill effect.",
+    "quiz_selection": "Active state border grows and changes to Primary color with a soft bounce."
+  },
+  "components": {
+    "reusability_strategy": "The entire app is parameterized by 'category' ('skin' | 'hair'). Do not build separate SkinQuiz and HairQuiz. Build a 'DoshaQuiz category={activeCategory}' component. Same for Recommendations and Profiles.",
+    "ui_primitives": {
+      "button": "Rounded-full, text-sm font-medium, padding-x-8 padding-y-3. Primary: bg-[#5C7A5A] text-white hover:bg-[#3A4F3A]. Secondary: border border-[#5C7A5A] text-[#5C7A5A].",
+      "tabs": "Custom pill toggle using Framer Motion for sliding background.",
+      "card": "Bg-white rounded-2xl soft_card border-subtle p-6"
+    }
+  },
+  "image_urls": {
+    "ayurvedic_ingredients": [
+      {
+        "url": "https://images.pexels.com/photos/19522722/pexels-photo-19522722.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Organic skincare ingredients layout, use for ingredients section."
+      },
+      {
+        "url": "https://images.pexels.com/photos/32361131/pexels-photo-32361131.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Seeds and natural oils, use for Dosha routine cards."
+      }
+    ],
+    "skin_care_models": [
+      {
+        "url": "https://images.pexels.com/photos/7019484/pexels-photo-7019484.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Woman applying cream, natural lighting. Use as Skin section hero or intro."
+      }
+    ],
+    "hair_care_models": [
+      {
+        "url": "https://images.unsplash.com/photo-1632765854612-9b02b6ec2b15?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1ODh8MHwxfHNlYXJjaHwzfHx3b21hbiUyMGhlYWx0aHklMjBoYWlyJTIwbmF0dXJhbHxlbnwwfHx8fDE3ODQzNjcyMzB8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Woman with natural afro. Use for Hair section hero or intro."
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Build a mobile-first app shell. The main layout should be constrained to a max-width (e.g., max-w-md mx-auto) with a cream background (#FAF7F0).",
+    "Use Framer Motion for the Skin / Hair tab toggle. Ensure the toggle updates a shared state (context or simple state) that gets passed down to reusable components.",
+    "Do NOT duplicate code for Skin vs Hair sections. Create a single <DoshaFlow category={activeTab} /> that maps content based on the active tab.",
+    "Include a Quiz Intro -> Multi-step Quiz -> Result Screen -> Recommendation Dashboard flow.",
+    "Implement typography correctly: Tailwind classes should map to Fraunces for headings, and Inter for body text.",
+    "Follow the color palette strictly. Avoid generic blue/indigo. All buttons/CTAs should utilize Sage Green or Copper."
+  ],
+  "accessibility": [
+    "All interactive elements MUST include a data-testid attribute.",
+    "Ensure contrast ratios are met. Text on cream background must use Ink (#2B2B26) or Deep Sage (#3A4F3A).",
+    "Use aria-labels for the section toggle and quiz choices."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "You tend to converge toward generic, 'on distribution' outputs. Avoid this: make creative, distinctive frontends that surprise and delight.",
+    "Never use pure white for the app background, use the specified Cream (#FAF7F0).",
+    "Do not use generic centered layouts. Left-align text for readability, center-align only specific UI moments like the tab toggle or results badge.",
+    "Add transition for specific interactive elements like buttons, inputs, excluding transforms (No transition-all).",
+    "Use lucide-react for standard icons, but prefer custom styling for Dosha-specific icons if possible."
+  ]
+}
