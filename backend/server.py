@@ -4,7 +4,7 @@ PrakritiDx Backend — v2
 - Medical urgency HARD-BLOCK safety check
 - Free hook (static frame + AI teaser)
 - Razorpay Payment Links (test mode) gate
-- Post-payment: full AI report (with GPT-4o vision on selfie + lab report)
+- Post-payment: full AI report (with Gemini vision on selfie + lab report)
 """
 import os
 import json
@@ -13,6 +13,7 @@ import base64
 import hmac
 import hashlib
 import logging
+import asyncio
 from datetime import datetime, timezone
 from typing import Optional, Literal, List, Dict, Any
 
@@ -24,7 +25,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent  # noqa: E402
+from google import genai  # noqa: E402
+from google.genai import types as genai_types  # noqa: E402
 import razorpay  # noqa: E402
 
 from safety import check_medical_urgency, BLOCK_MESSAGE  # noqa: E402
@@ -38,15 +40,21 @@ logger = logging.getLogger("prakritidx")
 
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
-EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
 RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
 APP_PUBLIC_URL = os.environ.get("APP_PUBLIC_URL", "")
 CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*")
 
+# Model name — Gemini's free tier (via Google AI Studio) currently covers Flash-class
+# models. Bump this here if Google moves the free tier to a newer Flash model.
+GEMINI_MODEL = "gemini-2.5-flash"
+
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
+
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Razorpay client — created lazily so the app boots even without keys set.
 _rzp_client = None
@@ -182,6 +190,31 @@ def _tally_dosha_from_intake(category: str, intake: Dict[str, Any]) -> str:
     return ordered[0][0]
 
 
+async def _call_gemini_with_retry(**kwargs):
+    """
+    Call Gemini with retry + exponential backoff on transient rate-limit errors
+    (free tier can return 429 / RESOURCE_EXHAUSTED under bursts). Non-rate-limit
+    errors are raised immediately — no point retrying a genuinely bad request.
+    Worst case: ~3 retries over ~13s before giving up, so a paying user isn't
+    left staring at an instant failure from a momentary limit.
+    """
+    delays = [2, 4, 8]  # seconds, exponential backoff
+    last_exc = None
+    for attempt, delay in enumerate([0] + delays):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            return await gemini_client.aio.models.generate_content(**kwargs)
+        except Exception as e:
+            last_exc = e
+            msg = str(e).lower()
+            is_rate_limit = "429" in msg or "resource_exhausted" in msg or "rate limit" in msg or "quota" in msg
+            if not is_rate_limit:
+                raise
+            logger.warning("Gemini rate-limited (attempt %d/%d): %s", attempt + 1, len(delays) + 1, e)
+    raise last_exc
+
+
 async def _generate_teaser_line(category: str, dosha: str, intake: Dict[str, Any]) -> str:
     """One-sentence AI teaser — deliberately withholds the routine."""
     prompt = (
@@ -192,13 +225,15 @@ async def _generate_teaser_line(category: str, dosha: str, intake: Dict[str, Any
         f"or diet advice. No lists. No colons. No em-dashes at the start. Return only the sentence."
     )
     try:
-        chat = LlmChat(
-            api_key=EMERGENT_LLM_KEY,
-            session_id=f"teaser-{uuid.uuid4().hex[:8]}",
-            system_message="You write concise, elegant, curiosity-piquing wellness copy.",
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-        resp = await chat.send_message(UserMessage(text=prompt))
-        line = str(resp).strip().strip('"').strip("'")
+        resp = await _call_gemini_with_retry(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                system_instruction="You write concise, elegant, curiosity-piquing wellness copy.",
+                max_output_tokens=100,
+            ),
+        )
+        line = (resp.text or "").strip().strip('"').strip("'")
         # keep it as a single sentence
         if "." in line:
             line = line.split(".")[0].strip() + "."
@@ -209,10 +244,11 @@ async def _generate_teaser_line(category: str, dosha: str, intake: Dict[str, Any
 
 async def _generate_full_report(category: str, dosha: str, intake: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Generate the FULL paid report using GPT-4o vision if selfie/lab report are attached.
+    Generate the FULL paid report using Gemini vision if selfie/lab report are attached.
     Returns structured JSON.
     """
     selfie_b64 = intake.get("selfie_b64")
+    selfie_mime = intake.get("selfie_mime") or "image/jpeg"
     lab_b64 = intake.get("lab_b64")
     lab_mime = intake.get("lab_mime")
 
@@ -283,23 +319,39 @@ Constraints:
 - Personalise based on the user's chat and MCQ answers — do not give a generic dosha report.
 """
 
-    # Attach images if provided
-    file_contents = []
+    # Build message content: text prompt + any images/documents. Gemini reads
+    # image-format lab reports as images, and PDF lab reports natively as
+    # documents (page-by-page vision) — nothing gets silently dropped.
+    content_parts: List[Any] = []
     if selfie_b64:
-        file_contents.append(ImageContent(image_base64=selfie_b64))
-    if lab_b64 and lab_mime and lab_mime.startswith("image/"):
-        file_contents.append(ImageContent(image_base64=lab_b64))
+        content_parts.append(
+            genai_types.Part.from_bytes(data=base64.b64decode(selfie_b64), mime_type=selfie_mime)
+        )
+    if lab_b64 and lab_mime:
+        if lab_mime.startswith("image/") or lab_mime == "application/pdf":
+            content_parts.append(
+                genai_types.Part.from_bytes(data=base64.b64decode(lab_b64), mime_type=lab_mime)
+            )
+    content_parts.append(user_text)
 
-    session_id = f"report-{uuid.uuid4().hex[:12]}"
-    llm = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=session_id,
-        system_message=system_prompt,
-    ).with_model("openai", "gpt-4o")
-
-    msg = UserMessage(text=user_text, file_contents=file_contents or None)
-    response = await llm.send_message(msg)
-    text = str(response).strip()
+    try:
+        response = await _call_gemini_with_retry(
+            model=GEMINI_MODEL,
+            contents=content_parts,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                max_output_tokens=2000,
+                response_mime_type="application/json",
+            ),
+        )
+    except Exception as e:
+        logger.exception("Gemini report generation failed after retries")
+        raise HTTPException(
+            503,
+            "Our AI is briefly overloaded generating your report. Your payment is safe — "
+            "please tap to try again in a moment.",
+        ) from e
+    text = (response.text or "").strip()
 
     # Strip code fences if any
     if text.startswith("```"):
@@ -409,12 +461,14 @@ async def submit_intake(payload: IntakeSubmit):
 
     # 2) Fetch uploaded content (if any)
     selfie_b64 = None
+    selfie_mime = None
     lab_b64 = None
     lab_mime = None
     if payload.selfie_upload_id:
         up = await db.uploads.find_one({"upload_id": payload.selfie_upload_id})
         if up:
             selfie_b64 = up["b64"]
+            selfie_mime = up["mime"]
     if payload.lab_upload_id:
         up = await db.uploads.find_one({"upload_id": payload.lab_upload_id})
         if up:
@@ -429,6 +483,7 @@ async def submit_intake(payload: IntakeSubmit):
         "selfie_upload_id": payload.selfie_upload_id,
         "lab_upload_id": payload.lab_upload_id,
         "selfie_b64": selfie_b64,
+        "selfie_mime": selfie_mime,
         "lab_b64": lab_b64,
         "lab_mime": lab_mime,
         "submitted_at": _now(),
