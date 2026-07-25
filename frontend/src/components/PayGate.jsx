@@ -98,6 +98,7 @@ export default function PayGate({ category, sessionId, hook, onPaid, onBack }) {
           onClick={() => setPlan("single")}
           title={`Full ${category} report`}
           price={99}
+          usdPrice={1.2}
           features={[
             "Complete Ayurvedic routine",
             "Ingredients + diet plan",
@@ -111,6 +112,7 @@ export default function PayGate({ category, sessionId, hook, onPaid, onBack }) {
           onClick={() => setPlan("combo")}
           title="Skin + Hair combo"
           price={149}
+          usdPrice={1.8}
           features={[
             "Unlocks BOTH sections",
             "Save ₹49 vs. buying separately",
@@ -131,7 +133,7 @@ export default function PayGate({ category, sessionId, hook, onPaid, onBack }) {
             {creating ? "Creating payment link…" : (
               <>
                 <Sparkles size={16} />
-                Pay ₹{plan === "single" ? 99 : 149} securely
+                Pay ₹{plan === "single" ? 99 : 149} (${plan === "single" ? "1.20" : "1.80"}) securely
                 <ExternalLink size={16} />
               </>
             )}
@@ -155,7 +157,7 @@ export default function PayGate({ category, sessionId, hook, onPaid, onBack }) {
               </div>
             </div>
             <div className="mt-4 flex flex-col gap-2">
-              <a
+              
                 href={link.short_url}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -190,7 +192,7 @@ export default function PayGate({ category, sessionId, hook, onPaid, onBack }) {
   );
 }
 
-function PlanCard({ testId, active, onClick, title, price, features, highlight }) {
+function PlanCard({ testId, active, onClick, title, price, usdPrice, features, highlight }) {
   return (
     <button
       onClick={onClick}
@@ -225,6 +227,11 @@ function PlanCard({ testId, active, onClick, title, price, features, highlight }
           <div className="font-display text-[26px] text-ink leading-none gold-underline">
             ₹{price}
           </div>
+          {usdPrice != null && (
+            <div className="text-[11px] text-ink/45 mt-1">
+              ≈ ${usdPrice.toFixed(2)}
+            </div>
+          )}
         </div>
       </div>
       <ul className="mt-4 space-y-1.5">
