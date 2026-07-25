@@ -26,6 +26,7 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,7 +48,7 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
     return () => {
       cancelled = true;
     };
-  }, [sessionId, category]);
+  }, [sessionId, category, retryTick]);
 
   if (loading) {
     return (
@@ -62,12 +63,24 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
   }
 
   if (error || !report) {
+    const isPaymentIssue = error === "This report is locked until payment is confirmed.";
     return (
       <div className="py-24 text-center" data-testid="report-error">
         <div className="text-ink/80 mb-4">{error}</div>
-        <button className="btn-ghost" onClick={onRestart}>
-          Start over
-        </button>
+        <div className="flex flex-col gap-2 items-center">
+          {!isPaymentIssue && (
+            <button
+              className="btn-primary"
+              onClick={() => setRetryTick((t) => t + 1)}
+              data-testid="report-retry-btn"
+            >
+              Try again
+            </button>
+          )}
+          <button className="btn-ghost" onClick={onRestart}>
+            Start over
+          </button>
+        </div>
       </div>
     );
   }
