@@ -157,7 +157,7 @@ export default function PayGate({ category, sessionId, hook, onPaid, onBack }) {
               </div>
             </div>
             <div className="mt-4 flex flex-col gap-2">
-              
+            <a  
                 href={link.short_url}
                 target="_blank"
                 rel="noopener noreferrer"
