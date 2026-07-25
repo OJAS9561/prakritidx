@@ -5,4 +5,4 @@ python-dotenv==1.0.1
 pydantic==2.10.4
 python-multipart==0.0.20
 razorpay==1.4.2
-emergentintegrations
+google-genai==2.14.0
