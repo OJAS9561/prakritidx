@@ -7,6 +7,7 @@ import SafetyBlock from "./components/SafetyBlock";
 import FreeHook from "./components/FreeHook";
 import PayGate from "./components/PayGate";
 import FullReport from "./components/FullReport";
+import InstallPrompt from "./components/InstallPrompt";
 import { getOrCreateSessionId } from "./lib/session";
 import { getPaymentStatus } from "./lib/api";
 import "./App.css";
@@ -181,6 +182,7 @@ export default function App() {
           )}
         </motion.div>
       </AnimatePresence>
+      <InstallPrompt />
     </AppShell>
   );
 }
