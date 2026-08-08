@@ -1,5 +1,6 @@
 import React from "react";
 import CategoryToggle from "./CategoryToggle";
+import Logo from "./Logo";
 
 /**
  * App shell: header (wordmark + tagline + toggle) + content area.
@@ -20,6 +21,7 @@ export default function AppShell({ children, category, onCategoryChange }) {
           <div className="px-5 pt-5 pb-3 flex items-start justify-between gap-3">
             <div className="flex flex-col leading-none">
               <div className="flex items-center gap-2">
+                <Logo size={30} />
                 {/* Wordmark */}
                 <span
                   className="font-display text-[26px] font-medium tracking-tight text-ink"
