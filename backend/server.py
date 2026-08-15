@@ -49,7 +49,7 @@ CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*")
 
 # Model name — Gemini's free tier (via Google AI Studio) currently covers Flash-class
 # models. Bump this here if Google moves the free tier to a newer Flash model.
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.5-flash"
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
@@ -387,73 +387,6 @@ async def health():
 @api.get("/intake/{category}")
 async def get_intake_schema(category: Category):
     return {"category": category, "questions": get_questions(category)}
-
-
-# ---- TEMP DIAGNOSTIC — remove after Razorpay auth issue is fixed ----------
-@api.get("/_diag/razorpay")
-async def diag_razorpay():
-    """Reports what THIS running process actually sees for the Razorpay
-    credentials, and attempts a real live call from inside the process.
-    Never returns the raw secret — only length/prefix/suffix/whitespace
-    signals, which are enough to catch a stale value or a paste error."""
-
-    def describe(name: str, val: str):
-        return {
-            "env_var": name,
-            "present": bool(val),
-            "length": len(val),
-            "prefix": val[:6] if val else None,
-            "suffix": val[-4:] if val else None,
-            "has_leading_ws": val != val.lstrip() if val else False,
-            "has_trailing_ws": val != val.rstrip() if val else False,
-            "has_internal_ws": any(c.isspace() for c in val.strip()) if val else False,
-        }
-
-    key_id_raw = os.environ.get("RAZORPAY_KEY_ID", "")
-    key_secret_raw = os.environ.get("RAZORPAY_KEY_SECRET", "")
-
-    result = {
-        "module_global_key_id": describe("RAZORPAY_KEY_ID (module global)", RAZORPAY_KEY_ID),
-        "module_global_key_secret": describe("RAZORPAY_KEY_SECRET (module global)", RAZORPAY_KEY_SECRET),
-        "fresh_os_environ_key_id": describe("RAZORPAY_KEY_ID (fresh read)", key_id_raw),
-        "fresh_os_environ_key_secret": describe("RAZORPAY_KEY_SECRET (fresh read)", key_secret_raw),
-        "module_matches_fresh_read": (RAZORPAY_KEY_ID == key_id_raw and RAZORPAY_KEY_SECRET == key_secret_raw),
-        "singleton_client_already_built": _rzp_client is not None,
-    }
-
-    # Try a real live call using a BRAND NEW client built from a fresh
-    # os.environ read right now, bypassing the cached singleton entirely.
-    try:
-        fresh_client = razorpay.Client(auth=(key_id_raw.strip(), key_secret_raw.strip()))
-        links = fresh_client.payment_link.all({"count": 1})
-        result["fresh_client_live_call"] = {
-            "success": True,
-            "sample_count": len(links.get("items", [])),
-        }
-    except Exception as e:
-        result["fresh_client_live_call"] = {
-            "success": False,
-            "error": str(e),
-            "error_type": type(e).__name__,
-        }
-
-    # Also try the actual cached singleton the app uses for real requests,
-    # to see if IT behaves differently from a fresh client.
-    try:
-        cached = rzp()
-        links2 = cached.payment_link.all({"count": 1})
-        result["cached_singleton_live_call"] = {
-            "success": True,
-            "sample_count": len(links2.get("items", [])),
-        }
-    except Exception as e:
-        result["cached_singleton_live_call"] = {
-            "success": False,
-            "error": str(e),
-            "error_type": type(e).__name__,
-        }
-
-    return result
 
 
 # ---- Uploads ---------------------------------------------------------------
