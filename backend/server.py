@@ -366,7 +366,12 @@ Constraints:
 
     gen_config = genai_types.GenerateContentConfig(
         system_instruction=system_prompt,
-        max_output_tokens=2000,
+        # The full report schema (routine, ingredients, diet, daily practice,
+        # herbs, escalation signals, etc.) is long enough that 2000 tokens was
+        # observed to truncate gemini-3.5-flash mid-response, producing
+        # invalid/incomplete JSON. Raised with real headroom so a verbose
+        # model's output isn't silently cut off before the closing braces.
+        max_output_tokens=4000,
         response_mime_type="application/json",
     )
 
