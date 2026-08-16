@@ -50,6 +50,10 @@ CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*")
 # Model name — Gemini's free tier (via Google AI Studio) currently covers Flash-class
 # models. Bump this here if Google moves the free tier to a newer Flash model.
 GEMINI_MODEL = "gemini-3.5-flash"
+# Fallback used only if the primary model returns a server-side error (e.g. 503
+# UNAVAILABLE under high demand). A stable, longer-established Flash model —
+# not itself the first choice, but reliable when the primary is overloaded.
+GEMINI_MODEL_FALLBACK = "gemini-2.0-flash"
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
@@ -190,15 +194,29 @@ def _tally_dosha_from_intake(category: str, intake: Dict[str, Any]) -> str:
     return ordered[0][0]
 
 
+def _is_transient_gemini_error(e: Exception) -> bool:
+    """True for errors worth retrying: rate limits (429) and momentary server-side
+    overload (503 UNAVAILABLE). False for genuinely bad requests, which should
+    fail immediately instead of being retried."""
+    msg = str(e).lower()
+    return (
+        "429" in msg or "resource_exhausted" in msg or "rate limit" in msg or "quota" in msg
+        or "503" in msg or "unavailable" in msg or "high demand" in msg
+    )
+
+
 async def _call_gemini_with_retry(**kwargs):
     """
-    Call Gemini with retry + exponential backoff on transient rate-limit errors
-    (free tier can return 429 / RESOURCE_EXHAUSTED under bursts). Non-rate-limit
-    errors are raised immediately — no point retrying a genuinely bad request.
-    Worst case: ~3 retries over ~13s before giving up, so a paying user isn't
-    left staring at an instant failure from a momentary limit.
+    Call Gemini with retry + exponential backoff on transient errors (rate limits
+    or momentary server overload). If the primary model keeps failing after all
+    retries, fall back once to GEMINI_MODEL_FALLBACK — a more established model
+    less likely to be hit by the same demand spike — before giving up entirely.
+    Worst case: ~3 retries on the primary (~13s) + 1 attempt on the fallback,
+    so a paying user isn't left staring at an instant failure from a momentary
+    limit or outage on one specific model.
     """
     delays = [2, 4, 8]  # seconds, exponential backoff
+    primary_model = kwargs.get("model")
     last_exc = None
     for attempt, delay in enumerate([0] + delays):
         if delay:
@@ -207,11 +225,21 @@ async def _call_gemini_with_retry(**kwargs):
             return await gemini_client.aio.models.generate_content(**kwargs)
         except Exception as e:
             last_exc = e
-            msg = str(e).lower()
-            is_rate_limit = "429" in msg or "resource_exhausted" in msg or "rate limit" in msg or "quota" in msg
-            if not is_rate_limit:
+            if not _is_transient_gemini_error(e):
                 raise
-            logger.warning("Gemini rate-limited (attempt %d/%d): %s", attempt + 1, len(delays) + 1, e)
+            logger.warning("Gemini transient error on %s (attempt %d/%d): %s", primary_model, attempt + 1, len(delays) + 1, e)
+
+    # Primary model exhausted its retries — try the fallback model once, if one
+    # is configured and different from the model that just failed.
+    if primary_model and GEMINI_MODEL_FALLBACK and primary_model != GEMINI_MODEL_FALLBACK:
+        logger.warning("Falling back to %s after %s failed all retries", GEMINI_MODEL_FALLBACK, primary_model)
+        fallback_kwargs = {**kwargs, "model": GEMINI_MODEL_FALLBACK}
+        try:
+            return await gemini_client.aio.models.generate_content(**fallback_kwargs)
+        except Exception as e:
+            logger.warning("Fallback model %s also failed: %s", GEMINI_MODEL_FALLBACK, e)
+            last_exc = e
+
     raise last_exc
 
 
@@ -334,41 +362,67 @@ Constraints:
             )
     content_parts.append(user_text)
 
-    try:
-        response = await _call_gemini_with_retry(
-            model=GEMINI_MODEL,
-            contents=content_parts,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                max_output_tokens=2000,
-                response_mime_type="application/json",
-            ),
-        )
-    except Exception as e:
-        logger.exception("Gemini report generation failed after retries")
-        raise HTTPException(
-            503,
-            "Our AI is briefly overloaded generating your report. Your payment is safe — "
-            "please tap to try again in a moment.",
-        ) from e
-    text = (response.text or "").strip()
+    gen_config = genai_types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        max_output_tokens=2000,
+        response_mime_type="application/json",
+    )
 
-    # Strip code fences if any
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-    text = text.strip()
+    # Try the primary model, then — if its output can't be parsed as JSON
+    # (not just a network/server error, which _call_gemini_with_retry already
+    # handles) — retry the whole generation once on the fallback model. A
+    # malformed response is rare but not impossible on a newer model, and it's
+    # a shame to fail a paid report over one bad generation when a retry on a
+    # more established model usually succeeds.
+    models_to_try = [GEMINI_MODEL]
+    if GEMINI_MODEL_FALLBACK and GEMINI_MODEL_FALLBACK != GEMINI_MODEL:
+        models_to_try.append(GEMINI_MODEL_FALLBACK)
 
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        start, end = text.find("{"), text.rfind("}")
-        if start >= 0 and end > start:
-            data = json.loads(text[start:end + 1])
-        else:
-            raise HTTPException(500, "AI report could not be parsed.")
-    return data
+    last_error: Optional[Exception] = None
+    for model_name in models_to_try:
+        try:
+            response = await _call_gemini_with_retry(
+                model=model_name,
+                contents=content_parts,
+                config=gen_config,
+            )
+        except Exception as e:
+            logger.exception("Gemini report generation failed on %s after retries", model_name)
+            last_error = e
+            continue
+
+        text = (response.text or "").strip()
+
+        # Strip code fences if any
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        text = text.strip()
+
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            start, end = text.find("{"), text.rfind("}")
+            if start >= 0 and end > start:
+                try:
+                    return json.loads(text[start:end + 1])
+                except json.JSONDecodeError:
+                    pass
+            # Log the raw text (truncated) so a recurrence is actually
+            # diagnosable instead of just showing a generic failure message.
+            logger.error(
+                "Gemini response from %s could not be parsed as JSON. Raw text (first 1500 chars): %r",
+                model_name, text[:1500],
+            )
+            last_error = ValueError(f"unparseable JSON from {model_name}")
+            continue
+
+    raise HTTPException(
+        503,
+        "Our AI is briefly overloaded generating your report. Your payment is safe — "
+        "please tap to try again in a moment.",
+    ) from last_error
 
 
 # -----------------------------------------------------------------------------
