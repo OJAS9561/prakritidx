@@ -51,9 +51,11 @@ CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*")
 # models. Bump this here if Google moves the free tier to a newer Flash model.
 GEMINI_MODEL = "gemini-3.5-flash"
 # Fallback used only if the primary model returns a server-side error (e.g. 503
-# UNAVAILABLE under high demand). A stable, longer-established Flash model —
-# not itself the first choice, but reliable when the primary is overloaded.
-GEMINI_MODEL_FALLBACK = "gemini-2.0-flash"
+# UNAVAILABLE under high demand) or an unparseable response. gemini-3.5-flash-lite
+# is a separate, cost/high-volume-optimized model in the current generation —
+# likely to have separate capacity from the primary model, and (unlike older
+# generations) confirmed available to newly created Gemini projects.
+GEMINI_MODEL_FALLBACK = "gemini-3.5-flash-lite"
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
