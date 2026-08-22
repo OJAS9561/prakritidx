@@ -9,7 +9,8 @@ import Logo from "./Logo";
 export default function AppShell({ children, category, onCategoryChange }) {
   return (
     <div className="app-bg grain relative">
-      <div className="mx-auto max-w-md w-full min-h-[100dvh] flex flex-col">
+      <div className="header-vignette" />
+      <div className="mx-auto max-w-md w-full min-h-[100dvh] flex flex-col relative">
         <header
           className="sticky top-0 z-20 backdrop-blur-md"
           style={{
@@ -49,7 +50,7 @@ export default function AppShell({ children, category, onCategoryChange }) {
         </main>
 
         <footer className="px-5 py-4 text-[10px] tracking-wider uppercase text-ink/40 text-center">
-          <span>Ayurveda · Modern Science · <span style={{ color: "#B8632F" }}>PrakritiDx</span></span>
+          <span>Ayurveda + Modern Science · <span style={{ color: "#B8632F" }}>PrakritiDx</span></span>
         </footer>
       </div>
     </div>
