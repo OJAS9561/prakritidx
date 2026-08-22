@@ -1,12 +1,26 @@
 /* App-level styles — keep global tokens in index.css */
 
-/* Ambient background wash — soft cream with a hint of sage in the corners */
+/* Ambient background wash — layered gold/sage/copper glows over a warm
+   champagne base, deepening toward the edges for real atmosphere */
 .app-bg {
   background:
-    radial-gradient(circle at 0% 0%, rgba(92, 122, 90, 0.10) 0%, transparent 40%),
-    radial-gradient(circle at 100% 100%, rgba(184, 99, 47, 0.06) 0%, transparent 45%),
-    #FAF7F0;
+    radial-gradient(circle at 15% -8%, rgba(243, 211, 133, 0.28) 0%, transparent 40%),
+    radial-gradient(circle at 92% 14%, rgba(31, 51, 32, 0.14) 0%, transparent 44%),
+    radial-gradient(ellipse at 50% 108%, rgba(139, 66, 20, 0.16) 0%, transparent 52%),
+    radial-gradient(ellipse at 8% 60%, rgba(92, 122, 90, 0.08) 0%, transparent 38%),
+    linear-gradient(180deg, #F9F3E4 0%, #F2E7CC 45%, #E7D6AC 100%);
   min-height: 100dvh;
+}
+
+/* Deep forest "lid" vignette behind the header — a premium-packaging feel
+   that echoes the dark glass of the seal logo */
+.header-vignette {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 190px;
+  background: linear-gradient(180deg, rgba(16,26,17,0.85) 0%, rgba(16,26,17,0.32) 45%, transparent 100%);
+  z-index: 1;
+  pointer-events: none;
 }
 
 /* Card lift interaction */
@@ -33,8 +47,19 @@
   top: 4px;
   bottom: 4px;
   border-radius: 999px;
-  background: linear-gradient(180deg, #5C7A5A, #3A4F3A);
-  box-shadow: 0 4px 16px rgba(58, 79, 58, 0.24);
+  background: linear-gradient(135deg, #547152 0%, #2E3F2E 55%, #1A251A 100%);
+  box-shadow: 0 6px 16px rgba(58,79,58,0.40), 0 0 0 1px rgba(217,164,65,0.35), 0 0 14px rgba(92,122,90,0.35);
+  overflow: hidden;
+}
+.pill-thumb::before {
+  content: "";
+  position: absolute;
+  top: -60%; left: -30%;
+  width: 40%; height: 220%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+  transform: rotate(20deg);
+  animation: btn-shine 3.2s ease-in-out infinite;
+  pointer-events: none;
 }
 
 /* Choice card selected ring — subtle gold, per design guidelines */
@@ -66,22 +91,42 @@
   color: #3A4F3A;
 }
 
-/* Button primary */
+/* Button primary — sage green kept, with a gold hairline glow and an
+   animated shine sweep so it reads as a deliberate, premium accent */
 .btn-primary {
-  background: #5C7A5A;
+  background: linear-gradient(135deg, #547152 0%, #2E3F2E 55%, #1A251A 100%);
   color: #FAF7F0;
   border-radius: 999px;
-  padding: 14px 28px;
-  font-weight: 500;
+  padding: 15px 28px;
+  font-weight: 600;
   font-size: 15px;
-  transition: background-color 0.25s ease, transform 0.2s ease;
+  letter-spacing: 0.01em;
+  transition: transform 0.2s ease;
   display: inline-flex;
   align-items: center;
   gap: 10px;
   border: 0;
   cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 18px 38px rgba(58,79,58,0.42), 0 0 0 1px rgba(217,164,65,0.35),
+              0 0 24px rgba(92,122,90,0.35), inset 0 1px 0 rgba(255,255,255,0.28);
 }
-.btn-primary:hover { background: #3A4F3A; }
+.btn-primary::before {
+  content: "";
+  position: absolute;
+  top: -60%; left: -30%;
+  width: 40%; height: 220%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+  transform: rotate(20deg);
+  animation: btn-shine 3.2s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes btn-shine {
+  0% { left: -30%; }
+  45% { left: 130%; }
+  100% { left: 130%; }
+}
 .btn-primary:active { transform: scale(0.98); }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
