@@ -2,12 +2,7 @@ import React, { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Lock, ArrowRight, RotateCcw, Sparkles } from "lucide-react";
 import { getFreeHook } from "../lib/api";
-
-const DOSHA_COLORS = {
-  vata: "#8B7BAA",
-  pitta: "#B8632F",
-  kapha: "#5C7A5A",
-};
+import DoshaDial, { getDoshaInsight } from "./DoshaDial";
 
 /**
  * FreeHook — deliberately partial. Static frame + AI-generated 1-liner.
@@ -69,8 +64,6 @@ export default function FreeHook({
     );
   }
 
-  const doshaColor = DOSHA_COLORS[hook.dosha] || "#5C7A5A";
-
   return (
     <div className="pb-8" data-testid={`free-hook-${category}`}>
       <div className="text-center pt-2">
@@ -85,22 +78,23 @@ export default function FreeHook({
         transition={{ duration: 0.5, ease: [0.2, 0.8, 0.2, 1] }}
         className="mt-6 mx-auto flex flex-col items-center"
       >
-        <div
-          className="w-24 h-24 rounded-full flex items-center justify-center shadow-lift"
-          style={{
-            background: `radial-gradient(circle at 30% 30%, ${doshaColor}, ${doshaColor}CC)`,
-          }}
-        >
-          <span className="font-display text-[46px] text-white leading-none">
-            {hook.dosha_label?.[0] || "?"}
-          </span>
-        </div>
+        <DoshaDial
+          breakdown={hook.dosha_breakdown}
+          dominant={hook.dosha}
+          dominantLabel={hook.dosha_label}
+        />
         <h1
           className="font-display text-[36px] leading-tight tracking-tight text-ink mt-6"
           data-testid="hook-dosha-label"
         >
           {hook.dosha_label}-leaning
         </h1>
+        <p
+          className="mt-4 text-[13.5px] leading-relaxed text-ink/70 text-center px-2"
+          data-testid="hook-dosha-insight"
+        >
+          {getDoshaInsight(category, hook.dosha_breakdown, hook.dosha)}
+        </p>
       </motion.div>
 
       <div className="gold-divider my-7" />
