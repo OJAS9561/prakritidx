@@ -180,8 +180,14 @@ DOSHA_HINTS = {
 }
 
 
-def _tally_dosha_from_intake(category: str, intake: Dict[str, Any]) -> str:
-    """Naive scoring: count how many selected multi-select values match each dosha's signal set."""
+def _dosha_breakdown_from_intake(category: str, intake: Dict[str, Any]) -> Dict[str, Any]:
+    """Scores each dosha by how many selected multi-select values match its
+    signal set, then converts to a percentage breakdown across all three —
+    real Ayurvedic constitution is usually a blend, not a single label, so
+    this is what actually powers the dosha balance dial on the frontend.
+    Returns {"dominant": <dosha>, "breakdown": {"vata": int, "pitta": int, "kapha": int}}
+    with the three percentages always summing to exactly 100.
+    """
     hints = DOSHA_HINTS[category]
     picked_values: List[str] = []
     for a in intake.get("answers", []):
@@ -191,9 +197,33 @@ def _tally_dosha_from_intake(category: str, intake: Dict[str, Any]) -> str:
         for v in meta["signals"]:
             if v in picked_values:
                 scores[dosha] += 1
-    # ties broken by first-declared order (vata > pitta > kapha)
-    ordered = sorted(scores.items(), key=lambda x: (-x[1], ["vata", "pitta", "kapha"].index(x[0])))
-    return ordered[0][0]
+
+    total = sum(scores.values())
+    if total == 0:
+        # No signal matches at all (e.g. only free-text was given) — fall
+        # back to a near-even split rather than dividing by zero. Order
+        # still respects the vata > pitta > kapha tie-break used elsewhere.
+        pct = {"vata": 34, "pitta": 33, "kapha": 33}
+    else:
+        raw = {k: (v / total) * 100 for k, v in scores.items()}
+        floored = {k: int(v) for k, v in raw.items()}
+        remainder = 100 - sum(floored.values())
+        # Distribute any leftover percentage points (from flooring) to the
+        # doshas with the largest fractional remainder, so the three always
+        # sum to exactly 100 instead of e.g. 99 or 101.
+        by_fraction = sorted(raw.items(), key=lambda x: -(x[1] - int(x[1])))
+        for i in range(remainder):
+            floored[by_fraction[i][0]] += 1
+        pct = floored
+
+    ordered = sorted(pct.items(), key=lambda x: (-x[1], ["vata", "pitta", "kapha"].index(x[0])))
+    dominant = ordered[0][0]
+    return {"dominant": dominant, "breakdown": pct}
+
+
+def _tally_dosha_from_intake(category: str, intake: Dict[str, Any]) -> str:
+    """Back-compat wrapper — returns just the dominant dosha string."""
+    return _dosha_breakdown_from_intake(category, intake)["dominant"]
 
 
 def _is_transient_gemini_error(e: Exception) -> bool:
@@ -571,7 +601,8 @@ async def free_hook(payload: ReportRequest):
     if reason:
         return {"blocked": True, "message": BLOCK_MESSAGE, "reason": reason}
 
-    dosha = _tally_dosha_from_intake(payload.category, intake)
+    dosha_result = _dosha_breakdown_from_intake(payload.category, intake)
+    dosha = dosha_result["dominant"]
     frame = DOSHA_HINTS[payload.category][dosha]["frame"]
     teaser = await _generate_teaser_line(payload.category, dosha, intake)
 
@@ -580,6 +611,7 @@ async def free_hook(payload: ReportRequest):
         "category": payload.category,
         "dosha": dosha,
         "dosha_label": dosha.capitalize(),
+        "dosha_breakdown": dosha_result["breakdown"],
         "hook": f"{frame} {teaser}".strip(),
         "frame": frame,
         "teaser": teaser,
@@ -771,7 +803,8 @@ async def full_report(payload: ReportRequest):
         return cached
 
     # 4) generate
-    dosha = _tally_dosha_from_intake(payload.category, intake)
+    dosha_result = _dosha_breakdown_from_intake(payload.category, intake)
+    dosha = dosha_result["dominant"]
     try:
         data = await _generate_full_report(payload.category, dosha, intake)
     except HTTPException:
@@ -785,6 +818,7 @@ async def full_report(payload: ReportRequest):
         "category": payload.category,
         "dosha": dosha,
         "dosha_label": dosha.capitalize(),
+        "dosha_breakdown": dosha_result["breakdown"],
         "generated_at": _now(),
         **data,
     }
