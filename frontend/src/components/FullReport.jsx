@@ -15,9 +15,9 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { getFullReport } from "../lib/api";
+import DoshaDial from "./DoshaDial";
 
 const TIME_ICON = { Morning: Sunrise, Evening: Moon, Weekly: CalendarDays };
-const DOSHA_COLORS = { vata: "#8B7BAA", pitta: "#B8632F", kapha: "#5C7A5A" };
 
 /**
  * Full paid report — vision-augmented, personalized.
@@ -85,7 +85,6 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
     );
   }
 
-  const doshaColor = DOSHA_COLORS[report.dosha] || "#5C7A5A";
   const otherCat = category === "skin" ? "hair" : "skin";
   const otherUnlocked = unlockedMap?.[otherCat];
 
@@ -102,17 +101,14 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
         transition={{ duration: 0.5 }}
         className="mt-6 mx-auto flex flex-col items-center"
       >
-        <div
-          className="w-24 h-24 rounded-full flex items-center justify-center shadow-lift relative"
-          style={{
-            background: `radial-gradient(circle at 30% 30%, ${doshaColor}, ${doshaColor}CC)`,
-          }}
-        >
-          <span className="font-display text-[46px] text-white leading-none">
-            {report.dosha_label?.[0]}
-          </span>
+        <div className="relative">
+          <DoshaDial
+            breakdown={report.dosha_breakdown}
+            dominant={report.dosha}
+            dominantLabel={report.dosha_label}
+          />
           <div
-            className="absolute -bottom-2 px-3 py-1 rounded-full text-[10px] font-medium tracking-widest uppercase text-ink shadow-soft"
+            className="absolute -bottom-2 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-[10px] font-medium tracking-widest uppercase text-ink shadow-soft"
             style={{ background: "#D9A441" }}
             data-testid="report-unlocked-badge"
           >
