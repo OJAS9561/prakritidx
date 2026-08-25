@@ -34,6 +34,7 @@ export default function IntakeFlow({ category, sessionId, onExit, onSubmitted })
   const [error, setError] = useState(null);
 
   // step 1 state
+  const [name, setName] = useState("");
   const [chatText, setChatText] = useState("");
   const [selfie, setSelfie] = useState(null); // { upload_id, previewUrl, fileName }
   const [lab, setLab] = useState(null);
@@ -51,6 +52,7 @@ export default function IntakeFlow({ category, sessionId, onExit, onSubmitted })
     setLoading(true);
     setError(null);
     setStep(1);
+    setName("");
     setChatText("");
     setSelfie(null);
     setLab(null);
@@ -140,6 +142,7 @@ export default function IntakeFlow({ category, sessionId, onExit, onSubmitted })
       const payload = {
         session_id: sessionId,
         category,
+        name: name.trim() || null,
         chat_text: chatText.trim() || null,
         answers: answerPayload,
         selfie_upload_id: selfie?.upload_id || null,
@@ -217,6 +220,23 @@ export default function IntakeFlow({ category, sessionId, onExit, onSubmitted })
             Describe your concern in your own words. Adding a selfie or a lab report helps —
             but everything here is optional.
           </p>
+
+          {/* Name */}
+          <div className="mt-6">
+            <label className="eyebrow" htmlFor="name">Your name (optional)</label>
+            <div className="mt-2 rounded-2xl bg-white border border-[#5C7A5A]/12 shadow-soft focus-within:border-[#5C7A5A]/40 transition-colors">
+              <input
+                id="name"
+                data-testid="intake-name-input"
+                type="text"
+                className="w-full bg-transparent outline-none text-[15px] text-ink placeholder:text-ink/35 p-4"
+                placeholder="So your report can address you by name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                maxLength={60}
+              />
+            </div>
+          </div>
 
           {/* Chat box */}
           <div className="mt-6">
