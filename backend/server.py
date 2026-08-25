@@ -108,6 +108,7 @@ class IntakeAnswer(BaseModel):
 class IntakeSubmit(BaseModel):
     session_id: str = Field(..., min_length=1)
     category: Category
+    name: Optional[str] = None
     chat_text: Optional[str] = None
     answers: List[IntakeAnswer] = []
     selfie_upload_id: Optional[str] = None
@@ -346,34 +347,52 @@ Return ONLY valid JSON (no markdown, no code fences) matching exactly this shape
   "lab_notes": "1-2 sentence summary of relevant lab findings, or empty string if no lab report",
   "constitution_read": "3-4 sentence explanation of what this dosha means for their {surface} + what's likely driving THEIR specific presentation",
   "routine": [
-    {{"time": "Morning", "step": "Concise step", "why": "One-line Ayurvedic + modern reason"}},
-    {{"time": "Evening", "step": "...", "why": "..."}},
-    {{"time": "Weekly", "step": "...", "why": "..."}}
+    {{
+      "time": "Morning",
+      "step": "Concise step",
+      "why": "One-line Ayurvedic + modern reason",
+      "prep": "If this step is a face mask, mist, or other prepared remedy: how to prepare it (ingredients + method) and how to apply/use it. Empty string if the step needs no separate preparation (e.g. 'cleanse with lukewarm water')."
+    }},
+    {{"time": "Evening", "step": "...", "why": "...", "prep": "..."}},
+    {{"time": "Weekly", "step": "...", "why": "...", "prep": "..."}}
   ],
   "key_ingredients": [
-    {{"name": "Ingredient", "role": "What it does for this dosha"}}
+    {{
+      "name": "Ingredient",
+      "role": "What it does for this dosha",
+      "how_to_use": "Concrete instructions: how much, how often, and in what form (e.g. 'Mix 1 tsp powder with rosewater, apply as a 10-minute mask twice a week')",
+      "where_to_get": "Where someone in India would realistically source this (e.g. 'Ayurvedic pharmacy or Amazon/Nykaa — look for cold-pressed, unrefined')"
+    }}
   ],
   "diet": {{
-    "favor": ["food/practice", "..."],
-    "reduce": ["food/practice", "..."]
+    "favor": [
+      {{"item": "food/practice", "benefit": "Why this specifically helps their dosha and presentation"}}
+    ],
+    "reduce": [
+      {{"item": "food/practice", "harm": "Why this specifically aggravates their dosha and presentation"}}
+    ]
   }},
   "daily_practice": [
     "Actionable daily/weekly habit specific to their constitution and presentation"
   ],
-  "avoid": ["Specific ingredient/practice to avoid based on their intake", "..."],
+  "avoid": [
+    {{"item": "Specific ingredient/practice to avoid based on their intake", "disadvantage": "What it actually does to worsen their specific presentation"}}
+  ],
   "herbs": [
     {{"name": "Herb", "usage": "How to use it — internal or topical"}}
   ],
+  "conclusion": "3-4 sentence wrap-up: summarize their specific constitution and presentation in plain terms, reinforce the single most important thing they should focus on first, and end on an encouraging, confident note.",
   "when_to_see_doctor": ["Specific escalation signal (e.g. 'if breakouts turn painful and warm')"]
 }}
 
 Constraints:
-- routine: 5-7 items covering Morning, Evening, and Weekly.
-- key_ingredients: 5-7 items with real Ayurvedic + modern names.
-- diet.favor: 5-8 items; diet.reduce: 4-6 items.
+- routine: 5-7 items covering Morning, Evening, and Weekly. Include "prep" details for AT LEAST 1-2 steps that are masks, mists, oils, or other prepared remedies — this is a paid report, so preparation instructions must be genuinely usable, not vague.
+- key_ingredients: 5-7 items with real Ayurvedic + modern names, each with concrete how_to_use and realistic where_to_get guidance.
+- diet.favor: 5-8 items, each with a specific benefit tied to their dosha; diet.reduce: 4-6 items, each with a specific harm tied to their dosha.
 - daily_practice: 4-6 items.
-- avoid: 4-6 items.
+- avoid: 4-6 items, each with a specific disadvantage explaining the real effect of not avoiding it.
 - herbs: 3-5 items.
+- conclusion: exactly one paragraph, 3-4 sentences.
 - when_to_see_doctor: 2-4 items.
 - Be concrete: name specific ingredients (e.g. "sandalwood powder", "bhringraj oil").
 - Personalise based on the user's chat and MCQ answers — do not give a generic dosha report.
@@ -396,12 +415,12 @@ Constraints:
 
     gen_config = genai_types.GenerateContentConfig(
         system_instruction=system_prompt,
-        # The full report schema (routine, ingredients, diet, daily practice,
-        # herbs, escalation signals, etc.) is long enough that 2000 tokens was
-        # observed to truncate gemini-3.5-flash mid-response, producing
-        # invalid/incomplete JSON. Raised with real headroom so a verbose
-        # model's output isn't silently cut off before the closing braces.
-        max_output_tokens=4000,
+        # The schema now includes prep instructions, how-to-use/where-to-get
+        # per ingredient, and benefit/harm text per diet & avoid item — roughly
+        # double the previous field count. Raised well past the 4000 that was
+        # already tight for the smaller schema, so a verbose model's output
+        # isn't silently cut off before the closing braces.
+        max_output_tokens=7000,
         response_mime_type="application/json",
     )
 
@@ -569,6 +588,7 @@ async def submit_intake(payload: IntakeSubmit):
     intake_doc = {
         "session_id": payload.session_id,
         "category": payload.category,
+        "name": (payload.name or "").strip() or None,
         "chat_text": payload.chat_text,
         "answers": [a.model_dump() for a in payload.answers],
         "selfie_upload_id": payload.selfie_upload_id,
@@ -609,6 +629,7 @@ async def free_hook(payload: ReportRequest):
     return {
         "blocked": False,
         "category": payload.category,
+        "user_name": intake.get("name"),
         "dosha": dosha,
         "dosha_label": dosha.capitalize(),
         "dosha_breakdown": dosha_result["breakdown"],
@@ -816,6 +837,7 @@ async def full_report(payload: ReportRequest):
     result = {
         "session_id": payload.session_id,
         "category": payload.category,
+        "user_name": intake.get("name"),
         "dosha": dosha,
         "dosha_label": dosha.capitalize(),
         "dosha_breakdown": dosha_result["breakdown"],
