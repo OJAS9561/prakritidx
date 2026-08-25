@@ -13,20 +13,31 @@ import {
   AlertTriangle,
   RotateCcw,
   ArrowRight,
+  Share2,
+  Check,
+  MapPin,
+  Droplet,
+  ChevronDown,
 } from "lucide-react";
 import { getFullReport } from "../lib/api";
 import DoshaDial from "./DoshaDial";
 
 const TIME_ICON = { Morning: Sunrise, Evening: Moon, Weekly: CalendarDays };
+const ORDER = ["vata", "pitta", "kapha"];
+const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 /**
- * Full paid report — vision-augmented, personalized.
+ * Full paid report — vision-augmented, personalized. This is the actual
+ * paid deliverable, so every section gets its own considered visual
+ * treatment rather than one repeated white-card pattern, and the top
+ * summary is built to be legible as a standalone shared/screenshotted card.
  */
 export default function FullReport({ category, sessionId, onRestart, onSwitchCategory, unlockedMap }) {
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [retryTick, setRetryTick] = useState(0);
+  const [shareState, setShareState] = useState("idle"); // idle | copied
 
   useEffect(() => {
     let cancelled = false;
@@ -88,42 +99,110 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
   const otherCat = category === "skin" ? "hair" : "skin";
   const otherUnlocked = unlockedMap?.[otherCat];
 
+  const pct = report.dosha_breakdown || { vata: 34, pitta: 33, kapha: 33 };
+  const orderedDoshas = ORDER.slice().sort((a, b) => (pct[b] || 0) - (pct[a] || 0));
+  const secondary = orderedDoshas.find((d) => d !== report.dosha) || orderedDoshas[1];
+
+  const handleShare = async () => {
+    const text = `My ${category} constitution on PrakritiDx: ${pct[report.dosha] ?? 0}% ${cap(report.dosha)} · ${pct[secondary] ?? 0}% ${cap(secondary)}. Know yours too.`;
+    const url = typeof window !== "undefined" ? window.location.origin : "";
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "My PrakritiDx Constitution", text, url });
+      } catch {
+        /* user cancelled share sheet — no-op */
+      }
+      return;
+    }
+    if (navigator.clipboard) {
+      try {
+        await navigator.clipboard.writeText(`${text} ${url}`);
+        setShareState("copied");
+        setTimeout(() => setShareState("idle"), 2200);
+      } catch {
+        /* clipboard unavailable — silently ignore */
+      }
+    }
+  };
+
   return (
     <div className="pb-10" data-testid={`report-${category}`}>
       {/* Header */}
       <div className="text-center pt-2">
+        {report.user_name && (
+          <div className="text-[13px] text-ink/50 mb-1.5" data-testid="report-greeting">
+            Hi {report.user_name},
+          </div>
+        )}
         <span className="eyebrow">Your full {category} report</span>
       </div>
 
+      {/* Shareable summary card — framed distinctly so it reads well on its
+          own if screenshotted or shared */}
       <motion.div
-        initial={{ opacity: 0, scale: 0.92 }}
+        initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.5 }}
-        className="mt-6 mx-auto flex flex-col items-center"
+        className="mt-6 rounded-[28px] p-6 flex flex-col items-center relative overflow-hidden"
+        style={{
+          background: "linear-gradient(180deg, #FFFFFF 0%, #FBF6E8 100%)",
+          border: "1px solid rgba(217,164,65,0.35)",
+          boxShadow: "0 16px 40px rgba(43,43,38,0.08)",
+        }}
+        data-testid="report-share-card"
       >
-        <div className="relative">
-          <DoshaDial
-            breakdown={report.dosha_breakdown}
-            dominant={report.dosha}
-            dominantLabel={report.dosha_label}
-          />
-          <div
-            className="absolute -bottom-2 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-[10px] font-medium tracking-widest uppercase text-ink shadow-soft"
-            style={{ background: "#D9A441" }}
-            data-testid="report-unlocked-badge"
-          >
-            Unlocked
-          </div>
+        <div
+          className="absolute top-3 right-3 px-2.5 py-1 rounded-full text-[9.5px] font-medium tracking-widest uppercase text-ink shadow-soft"
+          style={{ background: "#D9A441" }}
+          data-testid="report-unlocked-badge"
+        >
+          Unlocked
         </div>
-        <h1 className="font-display text-[36px] leading-tight tracking-tight text-ink mt-8" data-testid="report-dosha">
+
+        <DoshaDial
+          breakdown={report.dosha_breakdown}
+          dominant={report.dosha}
+          dominantLabel={report.dosha_label}
+        />
+        <h1 className="font-display text-[32px] leading-tight tracking-tight text-ink mt-6 text-center" data-testid="report-dosha">
           {report.dosha_label}-leaning
         </h1>
+        <p className="text-[12.5px] text-ink/50 mt-1 text-center capitalize">
+          {category} constitution
+        </p>
+
+        <button
+          onClick={handleShare}
+          className="mt-5 inline-flex items-center gap-2 px-4 py-2 rounded-full text-[12.5px] font-medium border transition-colors"
+          style={{
+            borderColor: "rgba(184,99,47,0.35)",
+            color: "#B8632F",
+            background: "rgba(255,255,255,0.6)",
+          }}
+          data-testid="report-share-btn"
+        >
+          {shareState === "copied" ? (
+            <>
+              <Check size={13} />
+              Copied to clipboard
+            </>
+          ) : (
+            <>
+              <Share2 size={13} />
+              Share my constitution
+            </>
+          )}
+        </button>
+
+        <div className="mt-4 flex items-center gap-1.5 text-[10px] tracking-widest uppercase text-ink/35">
+          <span>PrakritiDx</span>
+          <span>·</span>
+          <span>Ayurveda + Modern Science</span>
+        </div>
       </motion.div>
 
-      <div className="gold-divider my-7" />
-
       {/* Constitution read */}
-      <Card testId="report-constitution">
+      <Card testId="report-constitution" className="mt-6">
         <Eyebrow>Your Constitution</Eyebrow>
         <p className="mt-3 text-[15px] leading-relaxed text-ink/85">
           {report.constitution_read}
@@ -158,124 +237,181 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
         </div>
       )}
 
-      {/* Routine */}
-      <SectionHeader title="Your Daily Rhythm" subtitle="Precisely tuned for you" />
-      <div className="space-y-3 mt-4">
-        {report.routine?.map((s, i) => {
-          const Icon = TIME_ICON[s.time] || Sunrise;
-          return (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.04, duration: 0.35 }}
-              className="rounded-2xl bg-white p-5 border border-[#5C7A5A]/10 shadow-soft flex gap-4"
-              data-testid={`routine-step-${i}`}
-            >
-              <div
-                className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
-                style={{ background: "rgba(92,122,90,0.08)", color: "#3A4F3A" }}
+      {/* Routine — connected step-by-step timeline */}
+      <SectionHeader title="Your Daily Rhythm" subtitle="Step by step, precisely tuned" className="mt-10" />
+      <div className="mt-5 relative">
+        {/* connecting line */}
+        <div
+          className="absolute left-5 top-2 bottom-2 w-px"
+          style={{ background: "rgba(92,122,90,0.18)" }}
+        />
+        <div className="space-y-5">
+          {report.routine?.map((s, i) => {
+            const Icon = TIME_ICON[s.time] || Sunrise;
+            const hasPrep = s.prep && s.prep.trim().length > 0;
+            return (
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.05, duration: 0.35 }}
+                className="relative pl-14"
+                data-testid={`routine-step-${i}`}
               >
-                <Icon size={18} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-[10px] tracking-widest uppercase text-ink/50 mb-1">
-                  {s.time}
+                <div
+                  className="absolute left-0 top-0 w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 z-10"
+                  style={{ background: "#FAF7F0", border: "2px solid rgba(92,122,90,0.25)", color: "#3A4F3A" }}
+                >
+                  <Icon size={17} />
                 </div>
-                <div className="font-display text-[17px] text-ink leading-snug">
-                  {s.step}
+                <div className="rounded-2xl bg-white p-4 border border-[#5C7A5A]/10 shadow-soft">
+                  <div className="flex items-center justify-between">
+                    <div className="text-[10px] tracking-widest uppercase text-ink/50">
+                      {s.time} · Step {i + 1}
+                    </div>
+                  </div>
+                  <div className="font-display text-[17px] text-ink leading-snug mt-1">
+                    {s.step}
+                  </div>
+                  <div className="text-[13px] text-ink/60 mt-1.5 leading-relaxed">
+                    {s.why}
+                  </div>
+                  {hasPrep && (
+                    <details className="mt-3 group">
+                      <summary
+                        className="flex items-center gap-1.5 cursor-pointer list-none text-[12px] font-medium"
+                        style={{ color: "#B8632F" }}
+                      >
+                        <Droplet size={12} />
+                        How to prepare & use
+                        <ChevronDown size={13} className="transition-transform group-open:rotate-180" />
+                      </summary>
+                      <p
+                        className="mt-2 text-[13px] leading-relaxed text-ink/75 rounded-xl p-3"
+                        style={{ background: "rgba(217,164,65,0.10)" }}
+                        data-testid={`routine-prep-${i}`}
+                      >
+                        {s.prep}
+                      </p>
+                    </details>
+                  )}
                 </div>
-                <div className="text-[13px] text-ink/60 mt-1.5 leading-relaxed">
-                  {s.why}
-                </div>
-              </div>
-            </motion.div>
-          );
-        })}
+              </motion.div>
+            );
+          })}
+        </div>
       </div>
 
-      {/* Key ingredients */}
-      <SectionHeader title="Key Ingredients" subtitle="Ayurvedic + modern" className="mt-10" />
-      <div className="mt-4 space-y-3">
+      {/* Key ingredients — 2-column grid */}
+      <SectionHeader title="Key Ingredients" subtitle="Ayurvedic + modern, with how & where" className="mt-10" />
+      <div className="mt-5 grid grid-cols-2 gap-3">
         {report.key_ingredients?.map((ing, i) => (
           <div
             key={i}
-            className="rounded-2xl bg-white p-4 border border-[#5C7A5A]/10 shadow-soft flex gap-3"
+            className="rounded-2xl bg-white p-3.5 border border-[#5C7A5A]/10 shadow-soft"
             data-testid={`ingredient-${i}`}
           >
             <div
-              className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
+              className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0"
               style={{ background: "rgba(217,164,65,0.14)", color: "#B8632F" }}
             >
-              <Leaf size={14} />
+              <Leaf size={13} />
             </div>
-            <div className="flex-1">
-              <div className="font-display text-[16px] text-ink leading-tight">
-                {ing.name}
-              </div>
-              <div className="text-[13px] text-ink/60 mt-1 leading-relaxed">
-                {ing.role}
-              </div>
+            <div className="font-display text-[14.5px] text-ink leading-snug mt-2">
+              {ing.name}
             </div>
+            <div className="text-[11.5px] text-ink/55 mt-1 leading-snug">
+              {ing.role}
+            </div>
+            {ing.how_to_use && (
+              <div className="text-[11px] text-ink/70 mt-2 leading-snug">
+                <span className="font-medium" style={{ color: "#3A4F3A" }}>Use: </span>
+                {ing.how_to_use}
+              </div>
+            )}
+            {ing.where_to_get && (
+              <div className="flex items-start gap-1 text-[10.5px] text-ink/45 mt-1.5 leading-snug">
+                <MapPin size={11} className="mt-0.5 flex-shrink-0" />
+                <span>{ing.where_to_get}</span>
+              </div>
+            )}
           </div>
         ))}
       </div>
 
-      {/* Diet */}
+      {/* Diet — tinted split panels with benefit/harm per item */}
       {report.diet && (
         <>
-          <SectionHeader
-            title="Diet"
-            subtitle="What to favour and reduce"
-            className="mt-10"
-          />
-          <div className="grid grid-cols-1 gap-3 mt-4">
-            <Card testId="diet-favor">
+          <SectionHeader title="Diet" subtitle="What to favour and reduce, and why" className="mt-10" />
+          <div className="grid grid-cols-1 gap-3 mt-5">
+            <div
+              className="rounded-2xl p-5"
+              style={{ background: "rgba(92,122,90,0.08)", border: "1px solid rgba(92,122,90,0.18)" }}
+              data-testid="diet-favor"
+            >
               <div className="flex items-center gap-2 mb-3">
                 <div
                   className="w-6 h-6 rounded-full flex items-center justify-center"
-                  style={{ background: "rgba(92,122,90,0.15)", color: "#3A4F3A" }}
+                  style={{ background: "rgba(92,122,90,0.20)", color: "#3A4F3A" }}
                 >
                   <Utensils size={12} />
                 </div>
                 <span className="font-display text-[16px] text-ink">Favour</span>
               </div>
-              <ul className="space-y-1.5">
-                {report.diet.favor?.map((f, i) => (
-                  <li
-                    key={i}
-                    className="text-[13.5px] text-ink/80 leading-relaxed flex gap-2"
-                    data-testid={`diet-favor-${i}`}
-                  >
-                    <span style={{ color: "#5C7A5A" }}>·</span>
-                    <span>{f}</span>
-                  </li>
-                ))}
+              <ul className="space-y-2.5">
+                {report.diet.favor?.map((f, i) => {
+                  const item = typeof f === "string" ? f : f.item;
+                  const benefit = typeof f === "string" ? null : f.benefit;
+                  return (
+                    <li key={i} className="text-[13.5px] leading-relaxed" data-testid={`diet-favor-${i}`}>
+                      <div className="flex gap-2 text-ink/85">
+                        <span style={{ color: "#5C7A5A" }}>·</span>
+                        <span className="font-medium">{item}</span>
+                      </div>
+                      {benefit && (
+                        <div className="text-[12px] text-ink/55 pl-4 mt-0.5 leading-snug">
+                          {benefit}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
-            </Card>
-            <Card testId="diet-reduce">
+            </div>
+            <div
+              className="rounded-2xl p-5"
+              style={{ background: "rgba(184,99,47,0.07)", border: "1px solid rgba(184,99,47,0.20)" }}
+              data-testid="diet-reduce"
+            >
               <div className="flex items-center gap-2 mb-3">
                 <div
                   className="w-6 h-6 rounded-full flex items-center justify-center"
-                  style={{ background: "rgba(184,99,47,0.15)", color: "#B8632F" }}
+                  style={{ background: "rgba(184,99,47,0.18)", color: "#B8632F" }}
                 >
                   <Ban size={12} />
                 </div>
                 <span className="font-display text-[16px] text-ink">Reduce</span>
               </div>
-              <ul className="space-y-1.5">
-                {report.diet.reduce?.map((f, i) => (
-                  <li
-                    key={i}
-                    className="text-[13.5px] text-ink/80 leading-relaxed flex gap-2"
-                    data-testid={`diet-reduce-${i}`}
-                  >
-                    <span style={{ color: "#B8632F" }}>·</span>
-                    <span>{f}</span>
-                  </li>
-                ))}
+              <ul className="space-y-2.5">
+                {report.diet.reduce?.map((f, i) => {
+                  const item = typeof f === "string" ? f : f.item;
+                  const harm = typeof f === "string" ? null : f.harm;
+                  return (
+                    <li key={i} className="text-[13.5px] leading-relaxed" data-testid={`diet-reduce-${i}`}>
+                      <div className="flex gap-2 text-ink/85">
+                        <span style={{ color: "#B8632F" }}>·</span>
+                        <span className="font-medium">{item}</span>
+                      </div>
+                      {harm && (
+                        <div className="text-[12px] text-ink/55 pl-4 mt-0.5 leading-snug">
+                          {harm}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
-            </Card>
+            </div>
           </div>
         </>
       )}
@@ -284,7 +420,7 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
       {report.daily_practice?.length > 0 && (
         <>
           <SectionHeader title="Daily Practice" subtitle="Habits to build" className="mt-10" />
-          <Card testId="daily-practice" className="mt-4">
+          <Card testId="daily-practice" className="mt-5">
             <ul className="space-y-2">
               {report.daily_practice.map((p, i) => (
                 <li
@@ -301,39 +437,58 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
         </>
       )}
 
-      {/* Avoid */}
+      {/* Avoid — small cards with disadvantage explained */}
       {report.avoid?.length > 0 && (
         <>
-          <SectionHeader title="Avoid" subtitle="For your constitution" className="mt-10" />
-          <div className="mt-4 flex flex-wrap gap-2">
-            {report.avoid.map((a, i) => (
-              <span
-                key={i}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[13px] bg-white border border-[#B8632F]/20 text-ink/80"
-                data-testid={`avoid-${i}`}
-              >
-                <Ban size={12} style={{ color: "#B8632F" }} />
-                {a}
-              </span>
-            ))}
+          <SectionHeader title="Avoid" subtitle="And what happens if you don't" className="mt-10" />
+          <div className="mt-5 space-y-2.5">
+            {report.avoid.map((a, i) => {
+              const item = typeof a === "string" ? a : a.item;
+              const disadvantage = typeof a === "string" ? null : a.disadvantage;
+              return (
+                <div
+                  key={i}
+                  className="rounded-xl bg-white p-3.5 flex gap-2.5"
+                  style={{ border: "1px solid rgba(184,99,47,0.20)" }}
+                  data-testid={`avoid-${i}`}
+                >
+                  <Ban size={14} style={{ color: "#B8632F" }} className="flex-shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-[13.5px] text-ink font-medium leading-snug">{item}</div>
+                    {disadvantage && (
+                      <div className="text-[12px] text-ink/55 mt-1 leading-snug">{disadvantage}</div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </>
       )}
 
-      {/* Herbs */}
+      {/* Herbs — renamed, distinct apothecary-label style */}
       {report.herbs?.length > 0 && (
         <>
-          <SectionHeader title="Ayurvedic Herbs" subtitle="How to bring them in" className="mt-10" />
-          <div className="mt-4 space-y-3">
+          <SectionHeader
+            title="Extra Ayurvedic Herbs for Extra Benefits"
+            subtitle="Beyond the essentials"
+            className="mt-10"
+          />
+          <div className="mt-5 space-y-3">
             {report.herbs.map((h, i) => (
               <div
                 key={i}
-                className="rounded-2xl bg-white p-5 border border-[#5C7A5A]/10 shadow-soft"
+                className="rounded-2xl p-5 relative"
+                style={{
+                  background: "#FBF6E8",
+                  border: "1px dashed rgba(217,164,65,0.55)",
+                }}
                 data-testid={`herb-${i}`}
               >
                 <div className="flex items-center gap-2">
+                  <Leaf size={13} style={{ color: "#B8632F" }} />
                   <span className="font-display text-[17px] text-ink">{h.name}</span>
-                  <span className="text-[10px] tracking-widest uppercase gold-underline" style={{ color: "#B8632F" }}>
+                  <span className="text-[9.5px] tracking-widest uppercase gold-underline ml-auto" style={{ color: "#B8632F" }}>
                     Herb
                   </span>
                 </div>
@@ -344,16 +499,37 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
         </>
       )}
 
+      {/* Conclusion */}
+      {report.conclusion && (
+        <div
+          className="mt-10 rounded-[24px] p-6 relative overflow-hidden"
+          style={{
+            background: "linear-gradient(135deg, rgba(92,122,90,0.10) 0%, rgba(217,164,65,0.10) 100%)",
+            border: "1px solid rgba(217,164,65,0.30)",
+          }}
+          data-testid="report-conclusion"
+        >
+          <div className="flex items-center gap-2 mb-3">
+            <Sparkles size={14} style={{ color: "#B8632F" }} />
+            <Eyebrow>In Summary</Eyebrow>
+          </div>
+          <p className="font-display text-[16px] leading-relaxed text-ink/90">
+            {report.conclusion}
+          </p>
+        </div>
+      )}
+
       {/* When to see doctor */}
       {report.when_to_see_doctor?.length > 0 && (
         <div
-          className="mt-10 rounded-2xl bg-white p-5 border border-[#B8632F]/25 shadow-soft"
+          className="mt-6 rounded-2xl p-5"
+          style={{ background: "rgba(184,99,47,0.09)", border: "1px solid rgba(184,99,47,0.30)" }}
           data-testid="see-doctor"
         >
           <div className="flex items-center gap-2 mb-3">
             <div
               className="w-6 h-6 rounded-full flex items-center justify-center"
-              style={{ background: "rgba(184,99,47,0.15)", color: "#B8632F" }}
+              style={{ background: "rgba(184,99,47,0.18)", color: "#B8632F" }}
             >
               <AlertTriangle size={12} />
             </div>
