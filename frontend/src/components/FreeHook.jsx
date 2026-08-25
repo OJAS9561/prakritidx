@@ -67,6 +67,11 @@ export default function FreeHook({
   return (
     <div className="pb-8" data-testid={`free-hook-${category}`}>
       <div className="text-center pt-2">
+        {hook.user_name && (
+          <div className="text-[13px] text-ink/50 mb-1.5" data-testid="hook-greeting">
+            Hi {hook.user_name},
+          </div>
+        )}
         <span className="eyebrow" data-testid="hook-eyebrow">
           Free glimpse · Your {category} read
         </span>
