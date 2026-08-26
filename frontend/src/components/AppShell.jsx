@@ -12,7 +12,7 @@ export default function AppShell({ children, category, onCategoryChange }) {
       <div className="header-vignette" />
       <div className="mx-auto max-w-md w-full min-h-[100dvh] flex flex-col relative">
         <header
-          className="sticky top-0 z-20 backdrop-blur-md"
+          className="sticky top-0 z-20 backdrop-blur-md no-print"
           style={{
             background: "rgba(250, 247, 240, 0.82)",
             borderBottom: "1px solid rgba(58,79,58,0.08)",
@@ -49,7 +49,7 @@ export default function AppShell({ children, category, onCategoryChange }) {
           {children}
         </main>
 
-        <footer className="px-5 py-4 text-[10px] tracking-wider uppercase text-ink/40 text-center">
+        <footer className="px-5 py-4 text-[10px] tracking-wider uppercase text-ink/40 text-center no-print">
           <span>Ayurveda + Modern Science · <span style={{ color: "#B8632F" }}>PrakritiDx</span></span>
         </footer>
       </div>
