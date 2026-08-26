@@ -18,6 +18,7 @@ import {
   MapPin,
   Droplet,
   ChevronDown,
+  Download,
 } from "lucide-react";
 import { getFullReport } from "../lib/api";
 import DoshaDial from "./DoshaDial";
@@ -125,6 +126,14 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
     }
   };
 
+  const handleDownload = () => {
+    // Native print-to-PDF — works on every phone/desktop with zero added
+    // dependencies. Print CSS (see App.css) hides all nav/buttons and keeps
+    // only the report content, forcing colors back on since browsers strip
+    // them by default when printing.
+    if (typeof window !== "undefined") window.print();
+  };
+
   return (
     <div className="pb-10" data-testid={`report-${category}`}>
       {/* Header */}
@@ -171,28 +180,43 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
           {category} constitution
         </p>
 
-        <button
-          onClick={handleShare}
-          className="mt-5 inline-flex items-center gap-2 px-4 py-2 rounded-full text-[12.5px] font-medium border transition-colors"
-          style={{
-            borderColor: "rgba(184,99,47,0.35)",
-            color: "#B8632F",
-            background: "rgba(255,255,255,0.6)",
-          }}
-          data-testid="report-share-btn"
-        >
-          {shareState === "copied" ? (
-            <>
-              <Check size={13} />
-              Copied to clipboard
-            </>
-          ) : (
-            <>
-              <Share2 size={13} />
-              Share my constitution
-            </>
-          )}
-        </button>
+        <div className="mt-5 flex items-center gap-2.5 no-print">
+          <button
+            onClick={handleShare}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-[12.5px] font-medium border transition-colors"
+            style={{
+              borderColor: "rgba(184,99,47,0.35)",
+              color: "#B8632F",
+              background: "rgba(255,255,255,0.6)",
+            }}
+            data-testid="report-share-btn"
+          >
+            {shareState === "copied" ? (
+              <>
+                <Check size={13} />
+                Copied
+              </>
+            ) : (
+              <>
+                <Share2 size={13} />
+                Share
+              </>
+            )}
+          </button>
+          <button
+            onClick={handleDownload}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-[12.5px] font-medium border transition-colors"
+            style={{
+              borderColor: "rgba(92,122,90,0.30)",
+              color: "#3A4F3A",
+              background: "rgba(255,255,255,0.6)",
+            }}
+            data-testid="report-download-btn"
+          >
+            <Download size={13} />
+            Download
+          </button>
+        </div>
 
         <div className="mt-4 flex items-center gap-1.5 text-[10px] tracking-widest uppercase text-ink/35">
           <span>PrakritiDx</span>
@@ -551,7 +575,7 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
       )}
 
       {/* Combo cross-sell / cross-nav */}
-      <div className="mt-12">
+      <div className="mt-12 no-print">
         <div className="gold-divider mb-6" />
         {otherUnlocked ? (
           <button
@@ -593,12 +617,12 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
           <RotateCcw size={13} />
           Redo my {category} intake
         </button>
-
-        <p className="mt-8 text-[11px] text-ink/45 text-center leading-relaxed">
-          Guidance is educational and not a substitute for medical advice.
-          Patch-test new ingredients.
-        </p>
       </div>
+
+      <p className="mt-8 text-[11px] text-ink/45 text-center leading-relaxed">
+        Guidance is educational and not a substitute for medical advice.
+        Patch-test new ingredients.
+      </p>
     </div>
   );
 }
