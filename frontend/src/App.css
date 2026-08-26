@@ -174,6 +174,27 @@
     print-color-adjust: exact !important;
     color-adjust: exact !important;
   }
+  /* index.css locks html/body/#root to height:100% (viewport-height) for the
+     on-screen app-shell feel. That's fine for scrolling on screen, but many
+     browsers compute the printable page area from that same fixed height
+     instead of the taller actual content, so only one screen's worth ever
+     reaches the PDF — often landing on a blank slice once the header/footer
+     are hidden. Forcing auto height + visible overflow here restores normal
+     document flow so print pagination follows the real content height. */
+  html, body, #root {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+  .app-bg {
+    min-height: 0 !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+  .min-h-\[100dvh\] {
+    min-height: 0 !important;
+    height: auto !important;
+  }
   body, .app-bg {
     background: #FAF7F0 !important;
   }
