@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Sunrise,
@@ -39,6 +39,8 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
   const [error, setError] = useState(null);
   const [retryTick, setRetryTick] = useState(0);
   const [shareState, setShareState] = useState("idle"); // idle | copied
+  const [downloadState, setDownloadState] = useState("idle"); // idle | working | error
+  const reportRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -126,16 +128,50 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
     }
   };
 
-  const handleDownload = () => {
-    // Native print-to-PDF — works on every phone/desktop with zero added
-    // dependencies. Print CSS (see App.css) hides all nav/buttons and keeps
-    // only the report content, forcing colors back on since browsers strip
-    // them by default when printing.
-    if (typeof window !== "undefined") window.print();
+  const handleDownload = async () => {
+    if (!reportRef.current || downloadState === "working") return;
+    setDownloadState("working");
+    try {
+      // Dynamically imported so these two libraries only load when someone
+      // actually taps Download, not as part of the main app bundle.
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+        import("html2canvas"),
+        import("jspdf"),
+      ]);
+
+      const el = reportRef.current;
+      const canvas = await html2canvas(el, {
+        backgroundColor: "#FAF7F0",
+        scale: 2, // retina-quality output
+        useCORS: true,
+        windowWidth: el.scrollWidth,
+      });
+
+      // Single continuous page sized to the content's own aspect ratio —
+      // simpler and more reliable than paginating a tall report across
+      // fixed A4 pages, and avoids content getting cut mid-section.
+      const imgData = canvas.toDataURL("image/png");
+      const pageWidthMM = 210;
+      const pageHeightMM = (canvas.height * pageWidthMM) / canvas.width;
+      const pdf = new jsPDF({
+        orientation: "portrait",
+        unit: "mm",
+        format: [pageWidthMM, pageHeightMM],
+      });
+      pdf.addImage(imgData, "PNG", 0, 0, pageWidthMM, pageHeightMM);
+
+      const namePart = report.user_name ? `-${report.user_name.replace(/\s+/g, "_")}` : "";
+      pdf.save(`PrakritiDx-${category}-report${namePart}.pdf`);
+      setDownloadState("idle");
+    } catch (e) {
+      console.error("PDF generation failed", e);
+      setDownloadState("error");
+      setTimeout(() => setDownloadState("idle"), 2500);
+    }
   };
 
   return (
-    <div className="pb-10" data-testid={`report-${category}`}>
+    <div className="pb-10" data-testid={`report-${category}`} ref={reportRef}>
       {/* Header */}
       <div className="text-center pt-2">
         {report.user_name && (
@@ -180,7 +216,7 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
           {category} constitution
         </p>
 
-        <div className="mt-5 flex items-center gap-2.5 no-print">
+        <div className="mt-5 flex items-center gap-2.5 no-print" data-html2canvas-ignore="true">
           <button
             onClick={handleShare}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-[12.5px] font-medium border transition-colors"
@@ -205,16 +241,32 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
           </button>
           <button
             onClick={handleDownload}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-[12.5px] font-medium border transition-colors"
+            disabled={downloadState === "working"}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-[12.5px] font-medium border transition-colors disabled:opacity-60"
             style={{
-              borderColor: "rgba(92,122,90,0.30)",
-              color: "#3A4F3A",
+              borderColor:
+                downloadState === "error" ? "rgba(184,99,47,0.5)" : "rgba(92,122,90,0.30)",
+              color: downloadState === "error" ? "#B8632F" : "#3A4F3A",
               background: "rgba(255,255,255,0.6)",
             }}
             data-testid="report-download-btn"
           >
-            <Download size={13} />
-            Download
+            {downloadState === "working" ? (
+              <>
+                <div className="w-3 h-3 rounded-full border-2 border-current border-t-transparent animate-spin" />
+                Preparing…
+              </>
+            ) : downloadState === "error" ? (
+              <>
+                <Download size={13} />
+                Try again
+              </>
+            ) : (
+              <>
+                <Download size={13} />
+                Download
+              </>
+            )}
           </button>
         </div>
 
@@ -575,7 +627,7 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
       )}
 
       {/* Combo cross-sell / cross-nav */}
-      <div className="mt-12 no-print">
+      <div className="mt-12 no-print" data-html2canvas-ignore="true">
         <div className="gold-divider mb-6" />
         {otherUnlocked ? (
           <button
