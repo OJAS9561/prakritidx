@@ -49,17 +49,31 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
   // Caching it in localStorage too means a repeat visit renders instantly,
   // with a quiet background refresh to self-heal if anything ever changes.
   const cacheKey = `pdx_report_${sessionId}_${category}`;
+  const needsRegenKey = `pdx_needs_regen_${sessionId}_${category}`;
 
   useEffect(() => {
     let cancelled = false;
     setError(null);
 
-    let cachedLocal = null;
+    // If intake was resubmitted since the last report was generated (see
+    // IntakeFlow.jsx), the old report — local or server-cached — no longer
+    // reflects the current answers. Skip showing/trusting any cached copy
+    // and force the backend to generate a genuinely fresh one.
+    let needsRegen = false;
     try {
-      const raw = localStorage.getItem(cacheKey);
-      if (raw) cachedLocal = JSON.parse(raw);
+      needsRegen = localStorage.getItem(needsRegenKey) === "1";
     } catch {
-      /* localStorage unavailable or corrupted — fall through to a normal fetch */
+      /* localStorage unavailable — treat as no pending regen */
+    }
+
+    let cachedLocal = null;
+    if (!needsRegen) {
+      try {
+        const raw = localStorage.getItem(cacheKey);
+        if (raw) cachedLocal = JSON.parse(raw);
+      } catch {
+        /* localStorage unavailable or corrupted — fall through to a normal fetch */
+      }
     }
 
     if (cachedLocal) {
@@ -70,12 +84,13 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
       setReport(null);
     }
 
-    getFullReport({ session_id: sessionId, category })
+    getFullReport({ session_id: sessionId, category, regenerate: needsRegen })
       .then((r) => {
         if (cancelled) return;
         setReport(r);
         try {
           localStorage.setItem(cacheKey, JSON.stringify(r));
+          if (needsRegen) localStorage.removeItem(needsRegenKey);
         } catch {
           /* storage full or unavailable — non-fatal, just skip caching */
         }
