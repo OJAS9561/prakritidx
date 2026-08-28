@@ -185,6 +185,13 @@ export default function FreeHook({
           Unlock my full report
           <ArrowRight size={16} />
         </button>
+        <p
+          className="text-[11.5px] text-ink/50 text-center leading-relaxed -mt-1.5"
+          data-testid="one-time-payment-note"
+        >
+          One-time payment only — use it again and again to track your progress.
+          No recurring charges, ever.
+        </p>
         <button
           onClick={onRestart}
           className="btn-ghost justify-center"
