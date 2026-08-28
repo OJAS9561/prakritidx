@@ -42,15 +42,49 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
   const [downloadState, setDownloadState] = useState("idle"); // idle | working | error
   const reportRef = useRef(null);
 
+  // The backend already caches the generated report in the database (a
+  // repeat call skips Gemini entirely) — but the app still made a full
+  // network round-trip and showed the "Crafting…" spinner every single time
+  // this screen opened, even for a report generated minutes or days ago.
+  // Caching it in localStorage too means a repeat visit renders instantly,
+  // with a quiet background refresh to self-heal if anything ever changes.
+  const cacheKey = `pdx_report_${sessionId}_${category}`;
+
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     setError(null);
-    setReport(null);
+
+    let cachedLocal = null;
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (raw) cachedLocal = JSON.parse(raw);
+    } catch {
+      /* localStorage unavailable or corrupted — fall through to a normal fetch */
+    }
+
+    if (cachedLocal) {
+      setReport(cachedLocal);
+      setLoading(false);
+    } else {
+      setLoading(true);
+      setReport(null);
+    }
+
     getFullReport({ session_id: sessionId, category })
-      .then((r) => !cancelled && setReport(r))
+      .then((r) => {
+        if (cancelled) return;
+        setReport(r);
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify(r));
+        } catch {
+          /* storage full or unavailable — non-fatal, just skip caching */
+        }
+      })
       .catch((e) => {
         if (cancelled) return;
+        // Don't clobber an already-showing cached report with an error over
+        // what might just be a transient network hiccup in the background.
+        if (cachedLocal) return;
         const detail = e?.response?.data?.detail || "";
         setError(
           e?.response?.status === 402
