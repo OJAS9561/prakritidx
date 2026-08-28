@@ -149,6 +149,18 @@ export default function IntakeFlow({ category, sessionId, onExit, onSubmitted })
         lab_upload_id: lab?.upload_id || null,
       };
       const res = await submitIntake(payload);
+      // Any previously generated report for this session+category no longer
+      // reflects the just-submitted answers. Drop the locally cached copy so
+      // it can't flash stale content, and flag that the next fetch must ask
+      // the backend for a genuinely fresh report rather than serving the
+      // old cached one (see FullReport.jsx's fetch effect).
+      try {
+        localStorage.removeItem(`pdx_report_${sessionId}_${category}`);
+        localStorage.setItem(`pdx_needs_regen_${sessionId}_${category}`, "1");
+      } catch {
+        /* localStorage unavailable — non-fatal, worst case an old cached
+           report briefly shows until the background refresh replaces it */
+      }
       onSubmitted(res);
     } catch (e) {
       setError(e?.response?.data?.detail || "Something went wrong. Please try again.");
