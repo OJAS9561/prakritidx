@@ -393,7 +393,8 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
         )}
         <p className="mt-2.5 text-[11px] text-ink/40 leading-relaxed">
           You can also use the link sent to your email as a magic link to recover
-          your report from any other device or browser, whenever you want.
+          your report from any other device or browser, whenever you want — or in
+          case you lose your device or clear your browser.
         </p>
         </Card>
       </div>
