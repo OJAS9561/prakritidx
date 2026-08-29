@@ -19,8 +19,9 @@ import {
   Droplet,
   ChevronDown,
   Download,
+  Mail,
 } from "lucide-react";
-import { getFullReport } from "../lib/api";
+import { getFullReport, emailReport } from "../lib/api";
 import DoshaDial from "./DoshaDial";
 
 const TIME_ICON = { Morning: Sunrise, Evening: Moon, Weekly: CalendarDays };
@@ -40,6 +41,8 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
   const [retryTick, setRetryTick] = useState(0);
   const [shareState, setShareState] = useState("idle"); // idle | copied
   const [downloadState, setDownloadState] = useState("idle"); // idle | working | error
+  const [email, setEmail] = useState("");
+  const [emailState, setEmailState] = useState("idle"); // idle | working | sent | error
   const reportRef = useRef(null);
 
   // The backend already caches the generated report in the database (a
@@ -219,6 +222,19 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
     }
   };
 
+  const handleEmailSend = async () => {
+    const trimmed = email.trim();
+    if (!trimmed || emailState === "working") return;
+    setEmailState("working");
+    try {
+      await emailReport({ session_id: sessionId, category, email: trimmed });
+      setEmailState("sent");
+    } catch (e) {
+      setEmailState("error");
+      setTimeout(() => setEmailState("idle"), 3000);
+    }
+  };
+
   return (
     <div className="pb-10" data-testid={`report-${category}`} ref={reportRef}>
       {/* Header */}
@@ -325,6 +341,62 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
           <span>Ayurveda + Modern Science</span>
         </div>
       </motion.div>
+
+      {/* Save/recover by email — the real fix for access recovery: unlock
+          status lives only in this browser's local storage tied to an
+          anonymous session id, so losing the device or clearing storage
+          previously meant losing access to something already paid for.
+          Excluded from print/PDF export since it's a live input, not
+          report content. */}
+      <div className="mt-4 no-print" data-html2canvas-ignore="true">
+        <Card testId="report-email-save">
+        <div className="flex items-center gap-2">
+          <Mail size={14} style={{ color: "#B8632F" }} />
+          <Eyebrow>Save this report</Eyebrow>
+        </div>
+        <p className="mt-2 text-[13px] text-ink/60 leading-relaxed">
+          Email yourself a link back to this report — works on any device, no login needed.
+        </p>
+        {emailState === "sent" ? (
+          <div
+            className="mt-3 flex items-center gap-2 text-[13.5px] font-medium"
+            style={{ color: "#3A4F3A" }}
+            data-testid="email-report-sent"
+          >
+            <Check size={14} />
+            Sent — check your inbox.
+          </div>
+        ) : (
+          <div className="mt-3 flex gap-2">
+            <input
+              type="email"
+              inputMode="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@email.com"
+              className="flex-1 min-w-0 rounded-xl border border-[#5C7A5A]/20 px-3.5 py-2.5 text-[13.5px] outline-none focus:border-[#5C7A5A]/50 bg-white text-ink placeholder:text-ink/35"
+              data-testid="email-report-input"
+            />
+            <button
+              onClick={handleEmailSend}
+              disabled={emailState === "working" || !email.trim()}
+              className="btn-ghost px-4 flex-shrink-0 disabled:opacity-50"
+              data-testid="email-report-send-btn"
+            >
+              {emailState === "working"
+                ? "Sending…"
+                : emailState === "error"
+                ? "Try again"
+                : "Send"}
+            </button>
+          </div>
+        )}
+        <p className="mt-2.5 text-[11px] text-ink/40 leading-relaxed">
+          You can also use the link sent to your email as a magic link to recover
+          your report from any other device or browser, whenever you want.
+        </p>
+        </Card>
+      </div>
 
       {/* Constitution read */}
       <Card testId="report-constitution" className="mt-6">
