@@ -51,6 +51,9 @@ export const getPaymentStatus = (session_id) =>
 export const getFullReport = (payload) =>
   api.post(`/report/full`, payload).then((r) => r.data);
 
+export const emailReport = (payload) =>
+  api.post(`/report/email`, payload).then((r) => r.data);
+
 // Session state
 export const getSessionState = (session_id) =>
   api.get(`/session/${session_id}/state`).then((r) => r.data);
