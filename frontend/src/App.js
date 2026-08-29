@@ -20,7 +20,27 @@ import "./App.css";
  *   landing → intake → safety_blocked (terminal) | free_hook → pay → report
  */
 export default function App() {
-  const [category, setCategory] = useState("skin");
+  // A restore link (see session.js) may also carry `cat=skin|hair` so the
+  // person lands directly on the category their email was about, and
+  // `restoredFromLink` lets us auto-jump straight to their report below
+  // instead of making them tap "View my unlocked report" themselves.
+  const [restoredFromLink] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("restore") ? true : false;
+    } catch {
+      return false;
+    }
+  });
+  const [category, setCategory] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const cat = params.get("cat");
+      return cat === "hair" ? "hair" : "skin";
+    } catch {
+      return "skin";
+    }
+  });
   const [stage, setStage] = useState("landing");
   const [intakeAck, setIntakeAck] = useState(null); // { blocked, message?, reason? }
   const [hook, setHook] = useState(null); // { hook, dosha, dosha_label }
@@ -90,6 +110,16 @@ export default function App() {
       setStage("report");
     }
   }, [unlockedMap, category, stage]);
+
+  // Coming from a restore link (see session.js / EmailReportCard) and this
+  // category is confirmed unlocked — skip straight to the report instead of
+  // making them tap through Landing themselves.
+  useEffect(() => {
+    if (restoredFromLink && unlockedMap[category] && stage === "landing") {
+      setStage("report");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restoredFromLink, unlockedMap, category]);
 
   const restart = () => {
     setIntakeAck(null);
