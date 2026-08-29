@@ -14,6 +14,10 @@ import hmac
 import hashlib
 import logging
 import asyncio
+import re
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from datetime import datetime, timezone
 from typing import Optional, Literal, List, Dict, Any
 
@@ -45,6 +49,8 @@ RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "").strip()
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "").strip()
 RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "").strip()
 APP_PUBLIC_URL = os.environ.get("APP_PUBLIC_URL", "")
+GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS", "").strip()
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
 CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*")
 
 # Model name — Gemini's free tier (via Google AI Studio) currently covers Flash-class
@@ -124,11 +130,80 @@ class PaymentCreate(BaseModel):
 class ReportRequest(BaseModel):
     session_id: str
     category: Category
+    regenerate: bool = False
+
+
+class EmailReportRequest(BaseModel):
+    session_id: str
+    category: Category
+    email: str
 
 
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _send_report_email(to_email: str, report: Dict[str, Any], restore_url: str) -> bool:
+    """Sends a 'save your report' email with a magic restore link. This is
+    the actual fix for access recovery: a paid report's unlock status lives
+    only in the browser's local storage, tied to an anonymous session id —
+    lose the device or clear storage and there was previously no way back
+    in. The restore link re-seeds that same session id in a fresh browser,
+    so tapping it from any device lands the person straight back on their
+    already-unlocked, already-generated report.
+    Runs synchronously (blocking SMTP) — callers should invoke this via
+    asyncio.to_thread so it doesn't block the event loop.
+    """
+    if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
+        logger.error("Email not configured — missing GMAIL_ADDRESS/GMAIL_APP_PASSWORD")
+        return False
+
+    name = report.get("user_name") or "there"
+    category = report.get("category", "")
+    dosha_label = report.get("dosha_label", "")
+
+    html = f"""
+    <div style="font-family: Georgia, serif; max-width: 480px; margin: 0 auto; padding: 28px; color: #2B2B26; background: #FAF7F0;">
+      <div style="font-size: 20px; font-weight: bold; margin-bottom: 4px;">
+        Prakriti<span style="color:#B8632F;">Dx</span>
+      </div>
+      <p style="font-size: 15px; margin-top: 24px;">Hi {name},</p>
+      <p style="font-size: 15px; line-height: 1.6;">
+        Your <strong>{dosha_label}-leaning {category}</strong> constitution report is saved and ready
+        whenever you need it — on this device or any other.
+      </p>
+      <p style="margin: 28px 0;">
+        <a href="{restore_url}"
+           style="background:#3A4F3A;color:#FAF7F0;padding:13px 26px;border-radius:999px;
+                  text-decoration:none;font-weight:bold;font-size:14px;display:inline-block;">
+          View my full report
+        </a>
+      </p>
+      <p style="font-size: 12.5px; color: #8a8a80; line-height: 1.5;">
+        This link works on any device or browser — keep this email as your permanent
+        way back in. No account or login needed.
+      </p>
+    </div>
+    """
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"Your PrakritiDx {category} report"
+    msg["From"] = f"PrakritiDx <{GMAIL_ADDRESS}>"
+    msg["To"] = to_email
+    msg.attach(MIMEText(html, "html"))
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
+            server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+            server.sendmail(GMAIL_ADDRESS, [to_email], msg.as_string())
+        return True
+    except Exception:
+        logger.exception("Failed to send report email")
+        return False
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -814,14 +889,17 @@ async def full_report(payload: ReportRequest):
     if reason:
         return {"blocked": True, "message": BLOCK_MESSAGE, "reason": reason}
 
-    # 3) cached?
-    cached = await db.reports.find_one({
-        "session_id": payload.session_id,
-        "category": payload.category,
-    })
-    if cached:
-        cached.pop("_id", None)
-        return cached
+    # 3) cached? (skipped entirely when the caller explicitly asks for a
+    # fresh take via `regenerate` — e.g. after redoing intake with new
+    # answers, or tapping "Regenerate" on an already-viewed report)
+    if not payload.regenerate:
+        cached = await db.reports.find_one({
+            "session_id": payload.session_id,
+            "category": payload.category,
+        })
+        if cached:
+            cached.pop("_id", None)
+            return cached
 
     # 4) generate
     dosha_result = _dosha_breakdown_from_intake(payload.category, intake)
@@ -844,8 +922,46 @@ async def full_report(payload: ReportRequest):
         "generated_at": _now(),
         **data,
     }
-    await db.reports.insert_one(dict(result))
+    # replace_one(upsert=True) instead of insert_one — a regenerate call
+    # must cleanly overwrite the previous cached report for this
+    # session+category, not create a second document alongside it (which
+    # would make the earlier cache lookup's result unpredictable).
+    await db.reports.replace_one(
+        {"session_id": payload.session_id, "category": payload.category},
+        dict(result),
+        upsert=True,
+    )
     return result
+
+
+@api.post("/report/email")
+async def email_report(payload: EmailReportRequest):
+    """Sends a 'save your report' email with a magic restore link. Reuses
+    the same unlock + existence checks as viewing the report, so this can't
+    be used to email arbitrary addresses about a session that never paid or
+    never generated a report."""
+    if not _EMAIL_RE.match(payload.email.strip()):
+        raise HTTPException(400, "Please enter a valid email address.")
+
+    status_resp = await payments_status(payload.session_id)
+    if not status_resp["unlocked"].get(payload.category):
+        raise HTTPException(402, "This report isn't unlocked yet.")
+
+    report = await db.reports.find_one({
+        "session_id": payload.session_id,
+        "category": payload.category,
+    })
+    if not report:
+        raise HTTPException(404, "No report found yet — generate it first.")
+    report.pop("_id", None)
+
+    restore_url = f"{APP_PUBLIC_URL}/?restore={payload.session_id}&cat={payload.category}"
+
+    sent = await asyncio.to_thread(_send_report_email, payload.email.strip(), report, restore_url)
+    if not sent:
+        raise HTTPException(503, "Could not send email right now — please try again shortly.")
+
+    return {"sent": True}
 
 
 # ---- Utilities -------------------------------------------------------------
