@@ -185,6 +185,13 @@ def _send_report_email(to_email: str, report: Dict[str, Any], restore_url: str) 
         This link works on any device or browser — keep this email as your permanent
         way back in. No account or login needed.
       </p>
+      <hr style="border:none;border-top:1px solid #e5ddc8;margin:24px 0 16px;" />
+      <p style="font-size: 11px; color: #a8a290; line-height: 1.5;">
+        This email was requested via PrakritiDx by someone completing a personalized
+        {category} report. If you weren't expecting this, you can safely ignore it —
+        no action is needed and you won't be contacted again unless someone
+        requests it here again.
+      </p>
     </div>
     """
 
@@ -939,7 +946,15 @@ async def email_report(payload: EmailReportRequest):
     """Sends a 'save your report' email with a magic restore link. Reuses
     the same unlock + existence checks as viewing the report, so this can't
     be used to email arbitrary addresses about a session that never paid or
-    never generated a report."""
+    never generated a report.
+
+    Rate-limited per report (not just per request): the recipient's email
+    is never verified as belonging to whoever clicks Send, so without a
+    limit here this could be used to repeatedly email an unrelated
+    stranger. A short cooldown plus a small lifetime cap covers the
+    legitimate "save it" / "resend, I missed it" use case while blocking
+    sustained abuse.
+    """
     if not _EMAIL_RE.match(payload.email.strip()):
         raise HTTPException(400, "Please enter a valid email address.")
 
@@ -955,11 +970,38 @@ async def email_report(payload: EmailReportRequest):
         raise HTTPException(404, "No report found yet — generate it first.")
     report.pop("_id", None)
 
+    now = datetime.now(timezone.utc)
+    last_sent_str = report.get("last_emailed_at")
+    send_count = report.get("email_send_count", 0)
+
+    if last_sent_str:
+        try:
+            last_sent = datetime.fromisoformat(last_sent_str)
+            elapsed = (now - last_sent).total_seconds()
+            if elapsed < 60:
+                raise HTTPException(429, "Please wait a moment before sending again.")
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # malformed/legacy timestamp — don't block on a parse issue
+
+    if send_count >= 5:
+        raise HTTPException(
+            429,
+            "This report has already been emailed several times. Please check "
+            "an earlier email, or contact support if you still need help.",
+        )
+
     restore_url = f"{APP_PUBLIC_URL}/?restore={payload.session_id}&cat={payload.category}"
 
     sent = await asyncio.to_thread(_send_report_email, payload.email.strip(), report, restore_url)
     if not sent:
         raise HTTPException(503, "Could not send email right now — please try again shortly.")
+
+    await db.reports.update_one(
+        {"session_id": payload.session_id, "category": payload.category},
+        {"$set": {"last_emailed_at": now.isoformat()}, "$inc": {"email_send_count": 1}},
+    )
 
     return {"sent": True}
 
