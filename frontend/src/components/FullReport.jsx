@@ -43,6 +43,7 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
   const [downloadState, setDownloadState] = useState("idle"); // idle | working | error
   const [email, setEmail] = useState("");
   const [emailState, setEmailState] = useState("idle"); // idle | working | sent | error
+  const [emailError, setEmailError] = useState("");
   const reportRef = useRef(null);
 
   // The backend already caches the generated report in the database (a
@@ -226,12 +227,23 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
     const trimmed = email.trim();
     if (!trimmed || emailState === "working") return;
     setEmailState("working");
+    setEmailError("");
     try {
       await emailReport({ session_id: sessionId, category, email: trimmed });
       setEmailState("sent");
     } catch (e) {
+      const status = e?.response?.status;
+      const detail = e?.response?.data?.detail;
+      setEmailError(
+        detail ||
+          (status === 429
+            ? "Please wait a moment before sending again."
+            : "Could not send — please try again.")
+      );
       setEmailState("error");
-      setTimeout(() => setEmailState("idle"), 3000);
+      // Rate-limit messages are genuinely informative, so give them longer
+      // on screen than a generic transient-error retry prompt.
+      setTimeout(() => setEmailState("idle"), status === 429 ? 5000 : 3000);
     }
   };
 
@@ -390,6 +402,15 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
                 : "Send"}
             </button>
           </div>
+        )}
+        {emailState === "error" && emailError && (
+          <p
+            className="mt-2 text-[11.5px] leading-relaxed"
+            style={{ color: "#B8632F" }}
+            data-testid="email-report-error"
+          >
+            {emailError}
+          </p>
         )}
         <p className="mt-2.5 text-[11px] text-ink/40 leading-relaxed">
           You can also use the link sent to your email as a magic link to recover
