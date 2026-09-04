@@ -15,9 +15,7 @@ import hashlib
 import logging
 import asyncio
 import re
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import httpx
 from datetime import datetime, timezone
 from typing import Optional, Literal, List, Dict, Any
 
@@ -49,8 +47,14 @@ RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "").strip()
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "").strip()
 RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "").strip()
 APP_PUBLIC_URL = os.environ.get("APP_PUBLIC_URL", "")
-GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS", "").strip()
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
+GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS", "").strip()  # no longer used — Render blocks SMTP; see BREVO_* below
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "").strip()  # no longer used, kept only to avoid an unrelated diff
+# Raw SMTP is blocked outbound on Render's network (anti-spam platform
+# restriction — confirmed via "OSError: Network is unreachable" on connect,
+# not an auth failure). Brevo's transactional email API sends over plain
+# HTTPS instead, which works fine.
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "").strip()
+BREVO_SENDER_EMAIL = os.environ.get("BREVO_SENDER_EMAIL", "").strip()
 CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*")
 
 # Model name — Gemini's free tier (via Google AI Studio) currently covers Flash-class
@@ -145,7 +149,7 @@ class EmailReportRequest(BaseModel):
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
-def _send_report_email(to_email: str, report: Dict[str, Any], restore_url: str) -> bool:
+async def _send_report_email(to_email: str, report: Dict[str, Any], restore_url: str) -> bool:
     """Sends a 'save your report' email with a magic restore link. This is
     the actual fix for access recovery: a paid report's unlock status lives
     only in the browser's local storage, tied to an anonymous session id —
@@ -153,11 +157,14 @@ def _send_report_email(to_email: str, report: Dict[str, Any], restore_url: str) 
     in. The restore link re-seeds that same session id in a fresh browser,
     so tapping it from any device lands the person straight back on their
     already-unlocked, already-generated report.
-    Runs synchronously (blocking SMTP) — callers should invoke this via
-    asyncio.to_thread so it doesn't block the event loop.
+
+    Uses Brevo's transactional email HTTP API rather than raw SMTP — Render
+    blocks outbound SMTP connections on its network (confirmed via
+    "OSError: Network is unreachable" at the socket-connect stage, not an
+    auth failure), so a normal HTTPS API call is what actually works here.
     """
-    if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
-        logger.error("Email not configured — missing GMAIL_ADDRESS/GMAIL_APP_PASSWORD")
+    if not BREVO_API_KEY or not BREVO_SENDER_EMAIL:
+        logger.error("Email not configured — missing BREVO_API_KEY/BREVO_SENDER_EMAIL")
         return False
 
     name = report.get("user_name") or "there"
@@ -195,16 +202,27 @@ def _send_report_email(to_email: str, report: Dict[str, Any], restore_url: str) 
     </div>
     """
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"Your PrakritiDx {category} report"
-    msg["From"] = f"PrakritiDx <{GMAIL_ADDRESS}>"
-    msg["To"] = to_email
-    msg.attach(MIMEText(html, "html"))
+    payload = {
+        "sender": {"name": "PrakritiDx", "email": BREVO_SENDER_EMAIL},
+        "to": [{"email": to_email}],
+        "subject": f"Your PrakritiDx {category} report",
+        "htmlContent": html,
+    }
 
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
-            server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-            server.sendmail(GMAIL_ADDRESS, [to_email], msg.as_string())
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                "https://api.brevo.com/v3/smtp/email",
+                headers={
+                    "api-key": BREVO_API_KEY,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                json=payload,
+            )
+        if resp.status_code >= 400:
+            logger.error("Brevo email send failed: %s %s", resp.status_code, resp.text[:500])
+            return False
         return True
     except Exception:
         logger.exception("Failed to send report email")
@@ -994,7 +1012,7 @@ async def email_report(payload: EmailReportRequest):
 
     restore_url = f"{APP_PUBLIC_URL}/?restore={payload.session_id}&cat={payload.category}"
 
-    sent = await asyncio.to_thread(_send_report_email, payload.email.strip(), report, restore_url)
+    sent = await _send_report_email(payload.email.strip(), report, restore_url)
     if not sent:
         raise HTTPException(503, "Could not send email right now — please try again shortly.")
 
