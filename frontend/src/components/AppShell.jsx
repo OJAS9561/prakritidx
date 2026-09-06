@@ -49,8 +49,17 @@ export default function AppShell({ children, category, onCategoryChange }) {
           {children}
         </main>
 
-        <footer className="px-5 py-4 text-[10px] tracking-wider uppercase text-ink/40 text-center no-print">
-          <span>Ayurveda + Modern Science · <span style={{ color: "#B8632F" }}>PrakritiDx</span></span>
+        <footer className="px-5 py-4 text-center no-print">
+          <div className="text-[10px] tracking-wider uppercase text-ink/40">
+            <span>Ayurveda + Modern Science · <span style={{ color: "#B8632F" }}>PrakritiDx</span></span>
+          </div>
+          <div className="mt-2 flex items-center justify-center gap-3 text-[10px] text-ink/35">
+            <a href="/privacy.html" className="hover:text-ink/60">Privacy</a>
+            <span>·</span>
+            <a href="/terms.html" className="hover:text-ink/60">Terms</a>
+            <span>·</span>
+            <a href="/refund.html" className="hover:text-ink/60">Refunds</a>
+          </div>
         </footer>
       </div>
     </div>
