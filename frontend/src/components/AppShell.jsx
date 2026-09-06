@@ -53,12 +53,12 @@ export default function AppShell({ children, category, onCategoryChange }) {
           <div className="text-[10px] tracking-wider uppercase text-ink/40">
             <span>Ayurveda + Modern Science · <span style={{ color: "#B8632F" }}>PrakritiDx</span></span>
           </div>
-          <div className="mt-2 flex items-center justify-center gap-3 text-[10px] text-ink/35">
-            <a href="/privacy.html" className="hover:text-ink/60">Privacy</a>
-            <span>·</span>
-            <a href="/terms.html" className="hover:text-ink/60">Terms</a>
-            <span>·</span>
-            <a href="/refund.html" className="hover:text-ink/60">Refunds</a>
+          <div className="mt-2 flex items-center justify-center gap-3 text-[11.5px] font-semibold text-ink/60">
+            <a href="/privacy.html" className="hover:text-ink">Privacy</a>
+            <span className="text-ink/30">·</span>
+            <a href="/terms.html" className="hover:text-ink">Terms</a>
+            <span className="text-ink/30">·</span>
+            <a href="/refund.html" className="hover:text-ink">Refunds</a>
           </div>
         </footer>
       </div>
