@@ -280,15 +280,68 @@ DOSHA_HINTS = {
     },
 }
 
+# Phrase signals matched against what the user actually WRITES (chat_text,
+# plus any free-text MCQ answer) — not just what they check off. The intake
+# explicitly invites someone to describe their concern "in their own
+# words", so that description should genuinely influence their dosha
+# reading, not just get forwarded to the AI for prose later while the
+# score itself stays checkbox-only. Phrases are kept multi-word where
+# possible to avoid ambiguous single-word overlaps between doshas (e.g.
+# "dandruff" alone is common to both a dry-flaky Vata pattern and an
+# oily-buildup Kapha one — the surrounding words disambiguate which).
+TEXT_SIGNALS = {
+    "skin": {
+        "vata": [
+            "dry skin", "dryness", "flaky", "flakiness", "cracked", "cracking",
+            "sensitive skin", "tight skin", "rough patches", "cold weather",
+            "winter", "dull and dry", "dehydrated",
+        ],
+        "pitta": [
+            "redness", "red skin", "inflamed", "inflammation", "breakout",
+            "breakouts", "acne", "burning sensation", "irritated skin",
+            "rash", "sensitive to sun", "spicy food", "oily and red",
+            "stress breakouts", "hot weather",
+        ],
+        "kapha": [
+            "oily skin", "oiliness", "greasy skin", "clogged pores",
+            "blackheads", "congested skin", "dull and oily", "puffy skin",
+            "large pores", "excess oil", "acne cysts", "whiteheads",
+        ],
+    },
+    "hair": {
+        "vata": [
+            "dry scalp", "frizzy", "frizz", "brittle hair", "split ends",
+            "breakage", "thin and dry", "flyaway", "dry and itchy scalp",
+            "hair falling in winter", "rough hair",
+        ],
+        "pitta": [
+            "hair thinning", "hair loss", "receding hairline",
+            "premature grey", "premature greying", "burning scalp",
+            "itchy and hot scalp", "shedding a lot", "thinning at the crown",
+        ],
+        "kapha": [
+            "oily scalp", "greasy hair", "dandruff", "flat hair",
+            "heavy hair", "slow hair growth", "oily roots", "dull heavy hair",
+            "sticky scalp",
+        ],
+    },
+}
 
-def _dosha_breakdown_from_intake(category: str, intake: Dict[str, Any]) -> Dict[str, Any]:
-    """Scores each dosha by how many selected multi-select values match its
-    signal set, then converts to a percentage breakdown across all three —
-    real Ayurvedic constitution is usually a blend, not a single label, so
-    this is what actually powers the dosha balance dial on the frontend.
-    Returns {"dominant": <dosha>, "breakdown": {"vata": int, "pitta": int, "kapha": int}}
-    with the three percentages always summing to exactly 100.
-    """
+
+def _collect_written_text(intake: Dict[str, Any]) -> str:
+    """Every piece of free-form text the user actually wrote — the main
+    chat description plus any free-text MCQ answer — lowercased and joined,
+    for phrase-matching against TEXT_SIGNALS."""
+    parts = [intake.get("chat_text") or ""]
+    for a in intake.get("answers", []):
+        if a.get("free_text"):
+            parts.append(a["free_text"])
+    return " ".join(parts).lower()
+
+
+def _base_dosha_scores(category: str, intake: Dict[str, Any]) -> Dict[str, int]:
+    """Raw signal counts from checkboxes + written text only (no vision) —
+    the deterministic, free, instant part of the score."""
     hints = DOSHA_HINTS[category]
     picked_values: List[str] = []
     for a in intake.get("answers", []):
@@ -299,14 +352,54 @@ def _dosha_breakdown_from_intake(category: str, intake: Dict[str, Any]) -> Dict[
             if v in picked_values:
                 scores[dosha] += 1
 
+    # What the user actually WROTE — the chat description and any free-text
+    # answer — counts toward the score too, not just the checkboxes. The
+    # intake explicitly invites them to describe their concern in their own
+    # words, so that description should genuinely move the needle.
+    written = _collect_written_text(intake)
+    if written:
+        text_signals = TEXT_SIGNALS.get(category, {})
+        for dosha, phrases in text_signals.items():
+            for phrase in phrases:
+                if phrase in written:
+                    scores[dosha] += 1
+    return scores
+
+
+def _finalize_dosha_pct(scores: Dict[str, int]) -> Dict[str, Any]:
+    """Turns raw signal-match counts (checkboxes + text + optional vision
+    adjustment, all summed together beforehand) into a final percentage
+    breakdown, with the same-weight floor and dominant/secondary logic
+    applied regardless of which sources contributed to the raw scores."""
     total = sum(scores.values())
     if total == 0:
-        # No signal matches at all (e.g. only free-text was given) — fall
-        # back to a near-even split rather than dividing by zero. Order
-        # still respects the vata > pitta > kapha tie-break used elsewhere.
+        # No signal matches at all — neither checkboxes, written text, nor
+        # a selfie read matched anything recognizable. Fall back to a
+        # near-even split rather than dividing by zero. Order still
+        # respects the vata > pitta > kapha tie-break used elsewhere.
         pct = {"vata": 34, "pitta": 33, "kapha": 33}
     else:
         raw = {k: (v / total) * 100 for k, v in scores.items()}
+
+        # Classical Ayurveda holds that everyone carries some measure of all
+        # three doshas, just in different proportions — a literal 0% for any
+        # of them isn't just uncommon, it contradicts the framework itself,
+        # and reads as a giveaway that this is simple keyword-counting
+        # rather than a real constitutional read. Floor each dosha at a
+        # small minimum and take the difference from whichever dosha(s) are
+        # comfortably above it, so the blend always looks (and is) genuinely
+        # three-part, no matter how one-sided the raw signal matches were.
+        FLOOR = 6
+        deficits = {k: max(0, FLOOR - v) for k, v in raw.items()}
+        total_deficit = sum(deficits.values())
+        if total_deficit > 0:
+            raw = {k: v + deficits[k] for k, v in raw.items()}
+            above_floor = {k: v for k, v in raw.items() if deficits[k] == 0}
+            above_total = sum(above_floor.values())
+            if above_total > 0:
+                for k in above_floor:
+                    raw[k] -= total_deficit * (above_floor[k] / above_total)
+
         floored = {k: int(v) for k, v in raw.items()}
         remainder = 100 - sum(floored.values())
         # Distribute any leftover percentage points (from flooring) to the
@@ -320,6 +413,101 @@ def _dosha_breakdown_from_intake(category: str, intake: Dict[str, Any]) -> Dict[
     ordered = sorted(pct.items(), key=lambda x: (-x[1], ["vata", "pitta", "kapha"].index(x[0])))
     dominant = ordered[0][0]
     return {"dominant": dominant, "breakdown": pct}
+
+
+def _dosha_breakdown_from_intake(category: str, intake: Dict[str, Any]) -> Dict[str, Any]:
+    """Checkbox + written-text scoring only, finalized to a percentage
+    breakdown — no vision call. Kept as the simple, synchronous path for
+    anything that doesn't need (or can't await) the selfie-aware version."""
+    return _finalize_dosha_pct(_base_dosha_scores(category, intake))
+
+
+VISION_DOSHA_TRAITS = {
+    "skin": "dryness/flakiness (Vata), redness/inflammation (Pitta), or oiliness/congestion (Kapha)",
+    "hair": "dryness/frizz at the scalp and strands (Vata), thinning/scalp irritation (Pitta), or oiliness/heaviness (Kapha)",
+}
+
+
+async def _vision_dosha_scores(category: str, intake: Dict[str, Any]) -> Dict[str, int]:
+    """If a selfie was uploaded, asks Gemini to rate (0-3) how strongly it
+    visually shows signs of each dosha, and returns that as a score
+    increment to blend into the same weighting as checkboxes and written
+    text. Returns all-zero immediately, with no API call, when there's no
+    selfie — so this adds zero cost for the majority of free-hook views
+    that don't include one.
+    """
+    selfie_b64 = intake.get("selfie_b64")
+    if not selfie_b64:
+        return {"vata": 0, "pitta": 0, "kapha": 0}
+
+    selfie_mime = intake.get("selfie_mime") or "image/jpeg"
+    surface = "skin" if category == "skin" else "scalp and hair"
+    traits = VISION_DOSHA_TRAITS.get(category, VISION_DOSHA_TRAITS["skin"])
+
+    prompt = (
+        f"Look at this selfie and rate how strongly it visually shows signs of each Ayurvedic "
+        f"dosha on the person's {surface}: {traits}. "
+        f"Rate each dosha from 0 (no visible signs) to 3 (strongly visible) — they don't need to "
+        f"sum to anything in particular, rate each independently based only on what's visible. "
+        f'Return ONLY valid JSON, no markdown: {{"vata": 0-3, "pitta": 0-3, "kapha": 0-3}}'
+    )
+
+    try:
+        response = await _call_gemini_with_retry(
+            model=GEMINI_MODEL,
+            contents=[
+                genai_types.Part.from_bytes(data=base64.b64decode(selfie_b64), mime_type=selfie_mime),
+                prompt,
+            ],
+            config=genai_types.GenerateContentConfig(
+                max_output_tokens=100,
+                response_mime_type="application/json",
+            ),
+        )
+        text = (response.text or "").strip()
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        data = json.loads(text.strip())
+        return {
+            "vata": max(0, min(3, int(data.get("vata", 0)))),
+            "pitta": max(0, min(3, int(data.get("pitta", 0)))),
+            "kapha": max(0, min(3, int(data.get("kapha", 0)))),
+        }
+    except Exception:
+        # A vision hiccup should never break the dosha read — just fall
+        # back to zero contribution and let checkboxes + text carry it.
+        logger.warning("Vision dosha scoring failed, continuing without it", exc_info=True)
+        return {"vata": 0, "pitta": 0, "kapha": 0}
+
+
+async def _compute_dosha_result(category: str, intake: Dict[str, Any]) -> Dict[str, Any]:
+    """The full dosha read: checkboxes + written text + (if a selfie was
+    provided) a Gemini vision pass, all summed at equal weight before
+    converting to a final percentage breakdown. The vision score is cached
+    on the intake document the first time it's computed, so a free-hook
+    view and the later paid-report view of the SAME intake don't pay for
+    two separate Gemini vision calls for what is, structurally, the same
+    underlying question.
+    """
+    base = _base_dosha_scores(category, intake)
+
+    cached_vision = intake.get("vision_dosha_scores")
+    if cached_vision:
+        vision = cached_vision
+    else:
+        vision = await _vision_dosha_scores(category, intake)
+        if intake.get("selfie_b64"):
+            # Only worth persisting when there was actually a selfie to
+            # analyze — otherwise it's just {0,0,0} noise on every intake.
+            await db.intakes.update_one(
+                {"session_id": intake["session_id"], "category": intake["category"]},
+                {"$set": {"vision_dosha_scores": vision}},
+            )
+
+    combined = {k: base.get(k, 0) + vision.get(k, 0) for k in ("vata", "pitta", "kapha")}
+    return _finalize_dosha_pct(combined)
 
 
 def _tally_dosha_from_intake(category: str, intake: Dict[str, Any]) -> str:
@@ -721,7 +909,7 @@ async def free_hook(payload: ReportRequest):
     if reason:
         return {"blocked": True, "message": BLOCK_MESSAGE, "reason": reason}
 
-    dosha_result = _dosha_breakdown_from_intake(payload.category, intake)
+    dosha_result = await _compute_dosha_result(payload.category, intake)
     dosha = dosha_result["dominant"]
     frame = DOSHA_HINTS[payload.category][dosha]["frame"]
     teaser = await _generate_teaser_line(payload.category, dosha, intake)
@@ -927,7 +1115,7 @@ async def full_report(payload: ReportRequest):
             return cached
 
     # 4) generate
-    dosha_result = _dosha_breakdown_from_intake(payload.category, intake)
+    dosha_result = await _compute_dosha_result(payload.category, intake)
     dosha = dosha_result["dominant"]
     try:
         data = await _generate_full_report(payload.category, dosha, intake)
