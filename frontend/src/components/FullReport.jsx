@@ -44,14 +44,16 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
   const [email, setEmail] = useState("");
   const [emailState, setEmailState] = useState("idle"); // idle | working | sent | error
   const [emailError, setEmailError] = useState("");
+  const [pendingUpdate, setPendingUpdate] = useState(false);
+  const [updateState, setUpdateState] = useState("idle"); // idle | working | error
+  const [updateError, setUpdateError] = useState("");
   const reportRef = useRef(null);
 
   // The backend already caches the generated report in the database (a
   // repeat call skips Gemini entirely) — but the app still made a full
   // network round-trip and showed the "Crafting…" spinner every single time
   // this screen opened, even for a report generated minutes or days ago.
-  // Caching it in localStorage too means a repeat visit renders instantly,
-  // with a quiet background refresh to self-heal if anything ever changes.
+  // Caching it in localStorage too means a repeat visit renders instantly.
   const cacheKey = `pdx_report_${sessionId}_${category}`;
   const needsRegenKey = `pdx_needs_regen_${sessionId}_${category}`;
 
@@ -60,24 +62,25 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
     setError(null);
 
     // If intake was resubmitted since the last report was generated (see
-    // IntakeFlow.jsx), the old report — local or server-cached — no longer
-    // reflects the current answers. Skip showing/trusting any cached copy
-    // and force the backend to generate a genuinely fresh one.
+    // IntakeFlow.jsx), the report on file no longer reflects the current
+    // answers — but that's the person's call to act on, not something to
+    // silently swap out from under a button that says "View my unlocked
+    // report". Show what already exists; surface an "Update my report"
+    // banner they can choose to tap instead.
     let needsRegen = false;
     try {
       needsRegen = localStorage.getItem(needsRegenKey) === "1";
     } catch {
       /* localStorage unavailable — treat as no pending regen */
     }
+    setPendingUpdate(needsRegen);
 
     let cachedLocal = null;
-    if (!needsRegen) {
-      try {
-        const raw = localStorage.getItem(cacheKey);
-        if (raw) cachedLocal = JSON.parse(raw);
-      } catch {
-        /* localStorage unavailable or corrupted — fall through to a normal fetch */
-      }
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (raw) cachedLocal = JSON.parse(raw);
+    } catch {
+      /* localStorage unavailable or corrupted — fall through to a normal fetch */
     }
 
     if (cachedLocal) {
@@ -88,13 +91,16 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
       setReport(null);
     }
 
-    getFullReport({ session_id: sessionId, category, regenerate: needsRegen })
+    // Always fetch the existing report (never force regenerate here) —
+    // if nothing exists yet at all, this is what actually generates the
+    // first one; if something exists, this just quietly confirms/refreshes
+    // it in the background.
+    getFullReport({ session_id: sessionId, category, regenerate: false })
       .then((r) => {
         if (cancelled) return;
         setReport(r);
         try {
           localStorage.setItem(cacheKey, JSON.stringify(r));
-          if (needsRegen) localStorage.removeItem(needsRegenKey);
         } catch {
           /* storage full or unavailable — non-fatal, just skip caching */
         }
@@ -247,8 +253,69 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
     }
   };
 
+  const handleUpdateReport = async () => {
+    if (updateState === "working") return;
+    setUpdateState("working");
+    setUpdateError("");
+    try {
+      const r = await getFullReport({ session_id: sessionId, category, regenerate: true });
+      setReport(r);
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify(r));
+        localStorage.removeItem(needsRegenKey);
+      } catch {
+        /* storage full or unavailable — non-fatal */
+      }
+      setPendingUpdate(false);
+      setUpdateState("idle");
+    } catch (e) {
+      const detail = e?.response?.data?.detail;
+      setUpdateError(detail || "Could not update — please try again.");
+      setUpdateState("error");
+      // A weekly-cooldown message is genuinely informative and names a
+      // real date, so leave it visible rather than auto-clearing it —
+      // a generic transient error still resets after a few seconds.
+      if (!detail) {
+        setTimeout(() => setUpdateState("idle"), 3000);
+      }
+    }
+  };
+
   return (
     <div className="pb-10" data-testid={`report-${category}`} ref={reportRef}>
+      {pendingUpdate && (
+        <div
+          className="mb-5 rounded-2xl p-4 flex items-center gap-3 no-print"
+          style={{ background: "rgba(217,164,65,0.14)", border: "1px solid rgba(217,164,65,0.4)" }}
+          data-html2canvas-ignore="true"
+          data-testid="pending-update-banner"
+        >
+          <div className="flex-1">
+            <div className="text-[13.5px] font-medium text-ink">
+              Your answers have changed since this report was made.
+            </div>
+            <div className="text-[12px] text-ink/60 mt-0.5">
+              {updateState === "error" && updateError
+                ? updateError
+                : "This is showing your last generated report — update it to reflect your new intake."}
+              {updateState === "working" && " Usually takes 20–40 seconds."}
+            </div>
+          </div>
+          <button
+            onClick={handleUpdateReport}
+            disabled={updateState === "working"}
+            className="flex-shrink-0 px-3.5 py-2 rounded-full text-[12px] font-semibold disabled:opacity-60"
+            style={{ background: "#3A4F3A", color: "#FAF7F0" }}
+            data-testid="update-report-btn"
+          >
+            {updateState === "working"
+              ? "Updating…"
+              : updateState === "error"
+              ? "Try again"
+              : "Update my report"}
+          </button>
+        </div>
+      )}
       {/* Header */}
       <div className="text-center pt-2">
         {report.user_name && (
