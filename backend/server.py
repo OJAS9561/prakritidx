@@ -16,7 +16,7 @@ import logging
 import asyncio
 import re
 import httpx
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Literal, List, Dict, Any
 
 from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form, Request, Body
@@ -1103,16 +1103,38 @@ async def full_report(payload: ReportRequest):
         return {"blocked": True, "message": BLOCK_MESSAGE, "reason": reason}
 
     # 3) cached? (skipped entirely when the caller explicitly asks for a
-    # fresh take via `regenerate` — e.g. after redoing intake with new
-    # answers, or tapping "Regenerate" on an already-viewed report)
+    # fresh take via `regenerate` — e.g. tapping "Update my report" after
+    # redoing intake with new answers)
+    cached = await db.reports.find_one({
+        "session_id": payload.session_id,
+        "category": payload.category,
+    })
     if not payload.regenerate:
-        cached = await db.reports.find_one({
-            "session_id": payload.session_id,
-            "category": payload.category,
-        })
         if cached:
             cached.pop("_id", None)
             return cached
+    else:
+        # Regeneration is free for the user (matches the "use it again and
+        # again" promise made at checkout), but each one is a real Gemini
+        # call. Cap it to once a week per report — real skin/hair changes
+        # take weeks to show up anyway, so this still fully honors genuine
+        # progress-tracking while protecting the shared daily AI quota from
+        # a single very active user.
+        if cached and cached.get("generated_at"):
+            try:
+                last_gen = datetime.fromisoformat(cached["generated_at"])
+                elapsed = datetime.now(timezone.utc) - last_gen
+                if elapsed < timedelta(days=7):
+                    next_allowed = last_gen + timedelta(days=7)
+                    raise HTTPException(
+                        429,
+                        f"You can update this report again on {next_allowed.strftime('%B %d, %Y')}. "
+                        f"Your current report is still fully available until then.",
+                    )
+            except HTTPException:
+                raise
+            except Exception:
+                pass  # malformed/legacy timestamp — don't block on a parse issue
 
     # 4) generate
     dosha_result = await _compute_dosha_result(payload.category, intake)
