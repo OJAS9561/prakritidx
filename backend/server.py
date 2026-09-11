@@ -1128,6 +1128,8 @@ async def full_report(payload: ReportRequest):
                     next_allowed = last_gen + timedelta(days=7)
                     raise HTTPException(
                         429,
+                        "Since visible changes in skin and hair are slower, you can update your "
+                        "report once a week. "
                         f"You can update this report again on {next_allowed.strftime('%B %d, %Y')}. "
                         f"Your current report is still fully available until then.",
                     )
