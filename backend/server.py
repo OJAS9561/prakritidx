@@ -1159,6 +1159,19 @@ async def full_report(payload: ReportRequest):
         "generated_at": _now(),
         **data,
     }
+
+    # On a regenerate, preserve the report we're about to overwrite as a
+    # single embedded snapshot — this is what powers "compare with my
+    # previous report". Only ONE level back is kept (strip any snapshot
+    # nested inside the old doc itself) so this stays a fixed-size
+    # before/after comparison rather than a growing, unbounded history.
+    if payload.regenerate and cached:
+        previous_snapshot = dict(cached)
+        previous_snapshot.pop("_id", None)
+        previous_snapshot.pop("previous_report", None)
+        previous_snapshot.pop("progress_comparison", None)
+        result["previous_report"] = previous_snapshot
+
     # replace_one(upsert=True) instead of insert_one — a regenerate call
     # must cleanly overwrite the previous cached report for this
     # session+category, not create a second document alongside it (which
@@ -1169,6 +1182,130 @@ async def full_report(payload: ReportRequest):
         upsert=True,
     )
     return result
+
+
+async def _generate_progress_comparison(
+    category: str, old_report: Dict[str, Any], new_report: Dict[str, Any], dosha_deltas: Dict[str, int]
+) -> Dict[str, Any]:
+    """Compares two reports for the same person and writes a short,
+    encouraging set of progress notes. The dosha percentage deltas are
+    computed deterministically in Python (real numbers, not AI-invented) —
+    Gemini's job is only to interpret what they likely mean and note any
+    other meaningful differences in plain, warm language.
+    """
+    old_date = (old_report.get("generated_at") or "")[:10]
+    new_date = (new_report.get("generated_at") or "")[:10]
+
+    prompt = f"""Compare these two {category} constitution reports for the same person, generated on
+{old_date or 'an earlier date'} and {new_date or 'today'}.
+
+DOSHA BREAKDOWN THEN: {old_report.get('dosha_breakdown')}
+DOSHA BREAKDOWN NOW: {new_report.get('dosha_breakdown')}
+COMPUTED CHANGE (percentage points, already calculated — use these exact numbers, don't recompute): {dosha_deltas}
+
+CONSTITUTION READ THEN: {old_report.get('constitution_read', '')[:500]}
+CONSTITUTION READ NOW: {new_report.get('constitution_read', '')[:500]}
+
+CONCLUSION THEN: {old_report.get('conclusion', '')[:400]}
+CONCLUSION NOW: {new_report.get('conclusion', '')[:400]}
+
+Return ONLY valid JSON (no markdown, no code fences) matching exactly this shape:
+{{
+  "headline": "One warm, encouraging sentence summarizing the overall direction of change",
+  "notes": [
+    "3-5 short, specific bullet points comparing then vs now — reference the actual dosha percentage changes using the exact numbers given, and note any meaningful shifts in the constitution read or conclusion"
+  ]
+}}
+
+Constraints:
+- Be honest, not falsely positive — if something looks like it's moved in a less balanced direction, say so gently and constructively, don't just manufacture praise.
+- Reference the exact percentage point changes given above at least once.
+- Keep each note to one sentence.
+- Warm, genuine tone — this is meant to feel like real encouragement, not a generic template.
+"""
+
+    gen_config = genai_types.GenerateContentConfig(
+        max_output_tokens=600,
+        response_mime_type="application/json",
+    )
+    models_to_try = [GEMINI_MODEL]
+    if GEMINI_MODEL_FALLBACK and GEMINI_MODEL_FALLBACK != GEMINI_MODEL:
+        models_to_try.append(GEMINI_MODEL_FALLBACK)
+
+    last_error: Optional[Exception] = None
+    for model_name in models_to_try:
+        try:
+            response = await _call_gemini_with_retry(model=model_name, contents=prompt, config=gen_config)
+        except Exception as e:
+            logger.exception("Progress comparison failed on %s", model_name)
+            last_error = e
+            continue
+        text = (response.text or "").strip()
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        text = text.strip()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            start, end = text.find("{"), text.rfind("}")
+            if start >= 0 and end > start:
+                try:
+                    return json.loads(text[start:end + 1])
+                except json.JSONDecodeError:
+                    pass
+            last_error = ValueError(f"unparseable comparison JSON from {model_name}")
+            continue
+
+    raise HTTPException(503, "Could not generate your progress comparison right now — please try again shortly.") from last_error
+
+
+@api.post("/report/compare")
+async def compare_report(payload: ReportRequest):
+    """Compares the current report against the previous one embedded on it
+    (see the `previous_report` snapshot saved during regenerate), and
+    returns a short set of honest, encouraging progress notes. Cached on
+    the report itself once computed, since the same (previous, current)
+    pair never needs recomputing."""
+    status_resp = await payments_status(payload.session_id)
+    if not status_resp["unlocked"].get(payload.category):
+        raise HTTPException(402, "This report isn't unlocked yet.")
+
+    report = await db.reports.find_one({
+        "session_id": payload.session_id,
+        "category": payload.category,
+    })
+    if not report:
+        raise HTTPException(404, "No report found yet — generate it first.")
+
+    previous = report.get("previous_report")
+    if not previous:
+        raise HTTPException(
+            404,
+            "There's no previous report to compare against yet — this becomes available after "
+            "you update your report at least once.",
+        )
+
+    if report.get("progress_comparison"):
+        return report["progress_comparison"]
+
+    old_pct = previous.get("dosha_breakdown") or {}
+    new_pct = report.get("dosha_breakdown") or {}
+    dosha_deltas = {
+        k: (new_pct.get(k, 0) - old_pct.get(k, 0)) for k in ("vata", "pitta", "kapha")
+    }
+
+    comparison = await _generate_progress_comparison(payload.category, previous, report, dosha_deltas)
+    comparison["dosha_deltas"] = dosha_deltas
+    comparison["previous_generated_at"] = previous.get("generated_at")
+    comparison["current_generated_at"] = report.get("generated_at")
+
+    await db.reports.update_one(
+        {"session_id": payload.session_id, "category": payload.category},
+        {"$set": {"progress_comparison": comparison}},
+    )
+    return comparison
 
 
 @api.post("/report/email")
