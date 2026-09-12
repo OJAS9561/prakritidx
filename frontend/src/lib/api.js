@@ -54,6 +54,9 @@ export const getFullReport = (payload) =>
 export const emailReport = (payload) =>
   api.post(`/report/email`, payload).then((r) => r.data);
 
+export const compareReport = (payload) =>
+  api.post(`/report/compare`, payload).then((r) => r.data);
+
 // Session state
 export const getSessionState = (session_id) =>
   api.get(`/session/${session_id}/state`).then((r) => r.data);
