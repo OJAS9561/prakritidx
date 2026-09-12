@@ -20,8 +20,11 @@ import {
   ChevronDown,
   Download,
   Mail,
+  TrendingUp,
+  TrendingDown,
+  Minus,
 } from "lucide-react";
-import { getFullReport, emailReport } from "../lib/api";
+import { getFullReport, emailReport, compareReport } from "../lib/api";
 import DoshaDial from "./DoshaDial";
 
 const TIME_ICON = { Morning: Sunrise, Evening: Moon, Weekly: CalendarDays };
@@ -47,6 +50,8 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
   const [pendingUpdate, setPendingUpdate] = useState(false);
   const [updateState, setUpdateState] = useState("idle"); // idle | working | error
   const [updateError, setUpdateError] = useState("");
+  const [comparison, setComparison] = useState(null);
+  const [compareState, setCompareState] = useState("idle"); // idle | working | error
   const reportRef = useRef(null);
 
   // The backend already caches the generated report in the database (a
@@ -85,6 +90,7 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
 
     if (cachedLocal) {
       setReport(cachedLocal);
+      setComparison(cachedLocal.progress_comparison || null);
       setLoading(false);
     } else {
       setLoading(true);
@@ -99,6 +105,7 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
       .then((r) => {
         if (cancelled) return;
         setReport(r);
+        setComparison(r.progress_comparison || null);
         try {
           localStorage.setItem(cacheKey, JSON.stringify(r));
         } catch {
@@ -268,6 +275,11 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
       }
       setPendingUpdate(false);
       setUpdateState("idle");
+      // The report we just overwrote is now embedded as `previous_report`
+      // on the new one — any comparison fetched before this update was
+      // against an even older version, so it's stale now. Clear it; the
+      // compare button will re-fetch fresh against the new previous.
+      setComparison(null);
     } catch (e) {
       const detail = e?.response?.data?.detail;
       setUpdateError(detail || "Could not update — please try again.");
@@ -278,6 +290,19 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
       if (!detail) {
         setTimeout(() => setUpdateState("idle"), 3000);
       }
+    }
+  };
+
+  const handleCompare = async () => {
+    if (compareState === "working") return;
+    setCompareState("working");
+    try {
+      const c = await compareReport({ session_id: sessionId, category });
+      setComparison(c);
+      setCompareState("idle");
+    } catch (e) {
+      setCompareState("error");
+      setTimeout(() => setCompareState("idle"), 3000);
     }
   };
 
@@ -486,6 +511,84 @@ export default function FullReport({ category, sessionId, onRestart, onSwitchCat
         </p>
         </Card>
       </div>
+
+      {/* Progress comparison — only relevant once at least one update has
+          happened, since that's what creates a "previous" to compare against */}
+      {report.previous_report && (
+        <div className="mt-4 no-print" data-html2canvas-ignore="true">
+          <Card testId="report-progress">
+            <div className="flex items-center gap-2">
+              <TrendingUp size={14} style={{ color: "#3A4F3A" }} />
+              <Eyebrow>Your Progress</Eyebrow>
+            </div>
+
+            {!comparison ? (
+              <>
+                <p className="mt-2 text-[13px] text-ink/60 leading-relaxed">
+                  See how your {category} has changed since your last report
+                  {report.previous_report.generated_at &&
+                    ` (${new Date(report.previous_report.generated_at).toLocaleDateString("en-IN", {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })})`}
+                  .
+                </p>
+                <button
+                  onClick={handleCompare}
+                  disabled={compareState === "working"}
+                  className="btn-ghost mt-3 disabled:opacity-60"
+                  data-testid="compare-report-btn"
+                >
+                  <TrendingUp size={14} />
+                  {compareState === "working"
+                    ? "Comparing…"
+                    : compareState === "error"
+                    ? "Couldn't compare — try again"
+                    : "Compare with previous report and show progress"}
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="mt-2.5 font-display text-[15.5px] text-ink leading-snug">
+                  {comparison.headline}
+                </p>
+
+                {comparison.dosha_deltas && (
+                  <div className="flex items-center gap-4 mt-3.5">
+                    {["vata", "pitta", "kapha"].map((d) => {
+                      const delta = comparison.dosha_deltas[d] ?? 0;
+                      const Icon = delta > 0 ? TrendingUp : delta < 0 ? TrendingDown : Minus;
+                      const color = delta > 0 ? "#B8632F" : delta < 0 ? "#3A4F3A" : "#9a9488";
+                      return (
+                        <div key={d} className="flex items-center gap-1">
+                          <Icon size={12} style={{ color }} />
+                          <span className="text-[11.5px] text-ink/60 capitalize">
+                            {d} <span style={{ color }}>{delta > 0 ? "+" : ""}{delta}%</span>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <ul className="mt-3.5 space-y-2">
+                  {comparison.notes?.map((note, i) => (
+                    <li
+                      key={i}
+                      className="text-[13.5px] text-ink/80 leading-relaxed flex gap-2"
+                      data-testid={`progress-note-${i}`}
+                    >
+                      <span style={{ color: "#3A4F3A" }}>·</span>
+                      <span>{note}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </Card>
+        </div>
+      )}
 
       {/* Constitution read */}
       <Card testId="report-constitution" className="mt-6">
