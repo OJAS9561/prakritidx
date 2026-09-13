@@ -8,7 +8,7 @@ import FreeHook from "./components/FreeHook";
 import PayGate from "./components/PayGate";
 import FullReport from "./components/FullReport";
 import InstallPrompt from "./components/InstallPrompt";
-import { getOrCreateSessionId } from "./lib/session";
+import { getOrCreateSessionId, getProfiles, setActiveSession, createNewProfile } from "./lib/session";
 import { getPaymentStatus } from "./lib/api";
 import "./App.css";
 
@@ -18,6 +18,14 @@ import "./App.css";
  *
  * Stage machine (per category, persisted in localStorage):
  *   landing → intake → safety_blocked (terminal) | free_hook → pay → report
+ *
+ * Multiple people can share one device (e.g. a parent and a child on the
+ * same phone) via `profiles` — a small list of known session ids kept in
+ * local storage (see lib/session.js). Only one is ever "active" at a time,
+ * switching between them is explicit, and each has its own completely
+ * separate intake/payment/report history — the backend already keys
+ * everything off session_id, so the frontend's job is just to manage which
+ * one is currently active and never mix their cached UI state together.
  */
 export default function App() {
   // A restore link (see session.js) may also carry `cat=skin|hair` so the
@@ -46,11 +54,39 @@ export default function App() {
   const [hook, setHook] = useState(null); // { hook, dosha, dosha_label }
   const [paymentInfo, setPaymentInfo] = useState(null); // { plan, unlocked }
   const [unlockedMap, setUnlockedMap] = useState({ skin: false, hair: false });
+  const [sessionId, setSessionId] = useState(() => getOrCreateSessionId());
+  const [profiles, setProfiles] = useState(() => getProfiles());
 
-  const sessionId = useMemo(() => getOrCreateSessionId(), []);
-  const stateKey = `prakritidx:v2:${category}`;
+  // Cache key is scoped by session id AND category — without the session
+  // id, switching profiles would leak one person's cached stage/hook/etc.
+  // into another's view, since they'd otherwise share the same key.
+  const stateKey = `prakritidx:v2:${sessionId}:${category}`;
 
-  // hydrate per-category state on category change
+  const refreshProfiles = useCallback(() => setProfiles(getProfiles()), []);
+
+  const switchProfile = useCallback((id) => {
+    setActiveSession(id);
+    setSessionId(id);
+    setCategory("skin");
+    setStage("landing");
+    setIntakeAck(null);
+    setHook(null);
+    setPaymentInfo(null);
+    refreshProfiles();
+  }, [refreshProfiles]);
+
+  const startNewProfile = useCallback(() => {
+    const id = createNewProfile();
+    setSessionId(id);
+    setCategory("skin");
+    setStage("landing");
+    setIntakeAck(null);
+    setHook(null);
+    setPaymentInfo(null);
+    refreshProfiles();
+  }, [refreshProfiles]);
+
+  // hydrate per-category state on category (or session) change
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(stateKey) || "null");
@@ -69,7 +105,7 @@ export default function App() {
       setStage("landing");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [category]);
+  }, [category, sessionId]);
 
   // persist per-category state
   useEffect(() => {
@@ -134,7 +170,14 @@ export default function App() {
   };
 
   return (
-    <AppShell category={category} onCategoryChange={setCategory}>
+    <AppShell
+      category={category}
+      onCategoryChange={setCategory}
+      profiles={profiles}
+      activeSessionId={sessionId}
+      onSwitchProfile={switchProfile}
+      onNewProfile={startNewProfile}
+    >
       <AnimatePresence mode="wait">
         <motion.div
           key={`${category}-${stage}`}
