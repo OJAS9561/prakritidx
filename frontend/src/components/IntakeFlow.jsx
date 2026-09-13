@@ -17,6 +17,7 @@ import {
   uploadLabReport,
   submitIntake,
 } from "../lib/api";
+import { updateProfileName } from "../lib/session";
 
 /**
  * IntakeFlow — 3 steps:
@@ -149,6 +150,13 @@ export default function IntakeFlow({ category, sessionId, onExit, onSubmitted })
         lab_upload_id: lab?.upload_id || null,
       };
       const res = await submitIntake(payload);
+      // If they gave a name, register it against this device's profile
+      // list so the profile switcher shows "Priya" instead of a bare,
+      // anonymous session id once there's more than one person on this
+      // device.
+      if (name.trim()) {
+        updateProfileName(sessionId, name.trim());
+      }
       // Any previously generated report for this session+category no longer
       // reflects the just-submitted answers. Drop the locally cached copy so
       // it can't flash stale content, and flag that the next fetch must ask
